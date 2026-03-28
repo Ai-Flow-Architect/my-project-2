@@ -109,7 +109,7 @@ def check_password() -> bool:
         return True
 
     st.markdown('<div class="main-title">📄 36協定自動化ツール</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-title">朝日事務所</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-title">社会保険労務士法人あさひ労務管理センター</div>', unsafe_allow_html=True)
     st.divider()
 
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -424,7 +424,7 @@ def main() -> None:
 
 def _show_footer():
     st.markdown(
-        '<div class="footer">36協定自動化ツール｜朝日事務所</div>',
+        '<div class="footer">36協定自動化ツール｜社会保険労務士法人あさひ労務管理センター</div>',
         unsafe_allow_html=True,
     )
 
