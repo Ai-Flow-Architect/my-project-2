@@ -242,7 +242,7 @@ def main() -> None:
             zip_bytes, results = generate_zip(records)
 
         # 結果表示
-        success_count = sum(1 for r in results if "✅" in r["status"])
+        success_count = sum(1 for r in results if "✅" in r["結果"])
         fail_count = len(results) - success_count
 
         if fail_count == 0:
