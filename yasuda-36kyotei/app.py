@@ -316,6 +316,9 @@ def main() -> None:
 
     st.dataframe(preview_rows, use_container_width=True, hide_index=True)
 
+    with st.expander("📊 詳細データをすべて確認する"):
+        st.dataframe(records, use_container_width=True, hide_index=True)
+
     # --------------------------------------------------------
     # STEP 3: Word生成 & ダウンロード
     # --------------------------------------------------------
