@@ -2,6 +2,7 @@
 36協定自動化ツール - Streamlit Webアプリ
 社労士事務所向け。Excelアップロード → Word協定書生成 → メール送信
 """
+import base64
 import io
 import os
 import sys
@@ -224,7 +225,15 @@ def send_all_emails(records: list[dict], file_bytes: dict[str, bytes], smtp_conf
 # メインアプリ
 # ============================================================
 def main() -> None:
-    st.markdown('<div class="main-title">📄 36協定自動化ツール</div>', unsafe_allow_html=True)
+    # ロゴ＋タイトル
+    logo_path = Path(__file__).parent / "assets" / "logo.jpg"
+    if logo_path.exists():
+        logo_b64 = base64.b64encode(logo_path.read_bytes()).decode()
+        st.markdown(f"""
+        <div style="text-align:center; padding: 1rem 0 0.2rem 0;">
+            <img src="data:image/jpeg;base64,{logo_b64}" style="height:64px; width:64px; object-fit:contain; border-radius:50%;">
+        </div>""", unsafe_allow_html=True)
+    st.markdown('<div class="main-title">36協定自動化ツール</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-title">Excelをアップロードするだけで、36協定書（Word）の生成・メール送信が完了します</div>',
                 unsafe_allow_html=True)
 
@@ -302,6 +311,7 @@ def main() -> None:
 
     st.success(f"**{len(records)} 件** のデータを読み取りました。")
 
+    # 主要5列サマリー
     preview_rows = []
     for i, r in enumerate(records):
         form_type = r.get("様式パターン", "9")
@@ -310,14 +320,22 @@ def main() -> None:
             "#": i + 1,
             "事業所名": r.get("事業所名", "（未入力）"),
             "事業主名": r.get("事業主名", "（未入力）"),
-            "様式": form_label,
-            "メールアドレス": r.get("メールアドレス", "（未設定）"),
+            "協定書の種類": form_label,
+            "特別条項": "あり" if form_type in ("9_2", "9_3", "9_4", "9_5") else "なし",
+            "送信先メール": r.get("メールアドレス", "⚠️ 未設定"),
         })
 
     st.dataframe(preview_rows, use_container_width=True, hide_index=True)
 
-    with st.expander("📊 詳細データをすべて確認する"):
-        st.dataframe(records, use_container_width=True, hide_index=True)
+    # 全列展開式
+    with st.expander("📊 全データを確認する（クリックで展開）"):
+        # 内部キー（様式パターン等）を除外して表示
+        exclude_keys = {"様式パターン"}
+        display_records = [
+            {k: v for k, v in r.items() if k not in exclude_keys}
+            for r in records
+        ]
+        st.dataframe(display_records, use_container_width=True, hide_index=True)
 
     # --------------------------------------------------------
     # STEP 3: Word生成 & ダウンロード
