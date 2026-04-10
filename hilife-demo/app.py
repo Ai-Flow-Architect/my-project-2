@@ -155,21 +155,15 @@ with tab_upload:
             audio_bytes = uploaded.getvalue()
             audio_filename = uploaded.name
 
-# ─── STEP 2: 出力形式選択 ─────────────────────────────────────
+# ─── STEP 2: 出力形式（両方生成） ────────────────────────────
 st.markdown(
-    "<div class='step-box'><b>STEP 2</b>　出力形式を選択</div>",
+    "<div class='step-box'><b>STEP 2</b>　出力形式（Word・Excel 両方ダウンロードできます）</div>",
     unsafe_allow_html=True,
-)
-output_format = st.radio(
-    "出力形式",
-    options=["Word (.docx)", "Excel (.xlsx)"],
-    horizontal=True,
-    label_visibility="collapsed",
 )
 
 # ─── STEP 3: 実行ボタン ────────────────────────────────────────
 st.markdown(
-    "<div class='step-box'><b>STEP 3</b>　議事録を生成</div>",
+    "<div class='step-box'><b>STEP 2</b>　議事録を生成</div>",
     unsafe_allow_html=True,
 )
 
@@ -219,29 +213,30 @@ if run_btn and audio_bytes:
         for item in minutes.get("発言内容", []):
             st.markdown(f"**{item.get('話者', '')}**: {item.get('内容', '')}")
 
-    # ─── STEP 4: ダウンロード ──────────────────────────────────
+    # ─── STEP 3: ダウンロード ──────────────────────────────────
     st.divider()
     st.markdown(
-        "<div class='step-box'><b>STEP 4</b>　ダウンロード</div>",
+        "<div class='step-box'><b>STEP 3</b>　ダウンロード</div>",
         unsafe_allow_html=True,
     )
 
     interview_date = minutes.get("面談日", "面談記録").replace("年", "").replace("月", "").replace("日", "")
 
-    if output_format == "Word (.docx)":
-        file_bytes = to_word(minutes)
+    col_word, col_excel = st.columns(2)
+    with col_word:
+        word_bytes = to_word(minutes)
         st.download_button(
-            label="📄 Word ファイルをダウンロード",
-            data=file_bytes,
+            label="📄 Word でダウンロード",
+            data=word_bytes,
             file_name=f"面談記録_{interview_date}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             use_container_width=True,
         )
-    else:
-        file_bytes = to_excel(minutes)
+    with col_excel:
+        excel_bytes = to_excel(minutes)
         st.download_button(
-            label="📊 Excel ファイルをダウンロード",
-            data=file_bytes,
+            label="📊 Excel でダウンロード",
+            data=excel_bytes,
             file_name=f"面談記録_{interview_date}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
