@@ -1,5 +1,6 @@
 """
-exporter.py — 議事録 dict を Word(.docx) または Excel(.xlsx) に書き出す
+exporter.py — モニタリング報告書 dict を Word(.docx) または Excel(.xlsx) に書き出す
+新規作成・既存ファイルへの追記 の両方に対応
 """
 from __future__ import annotations
 
@@ -8,134 +9,192 @@ from datetime import date
 
 from docx import Document
 from docx.shared import Pt, RGBColor
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
+_HEADER_COLOR = "4A6CF7"
+_LIGHT_BG = "EEF2FF"
+_WHITE = "FFFFFF"
 
-# ─── Word 出力 ───────────────────────────────────────────────
 
-def to_word(minutes: dict) -> bytes:
-    doc = Document()
+# ══════════════════════════════════════════════════════════
+#  Word 出力
+# ══════════════════════════════════════════════════════════
+
+def _add_page_break(doc: Document) -> None:
+    p = OxmlElement("w:p")
+    r = OxmlElement("w:r")
+    br = OxmlElement("w:br")
+    br.set(qn("w:type"), "page")
+    r.append(br)
+    p.append(r)
+    doc.element.body.append(p)
+
+
+def _write_monitoring_to_doc(doc: Document, minutes: dict) -> None:
+    """モニタリング報告書1件分を doc に書き込む（新規・追記共通）"""
+
+    today = date.today().strftime("%Y年%m月%d日")
+    create_date = minutes.get("作成日") or today
 
     # タイトル
-    title = doc.add_heading("面談記録", level=1)
+    title = doc.add_heading("モニタリング報告書", level=1)
     title.runs[0].font.color.rgb = RGBColor(0x1a, 0x1a, 0x2e)
 
     # 基本情報
-    doc.add_paragraph(f"面談日: {minutes.get('面談日') or date.today().strftime('%Y年%m月%d日')}")
-    participants = "、".join(minutes.get("参加者", []))
-    doc.add_paragraph(f"参加者: {participants}")
+    doc.add_paragraph(f"利用者氏名：{minutes.get('利用者氏名') or '　　　　'}")
+    doc.add_paragraph(f"作成日：{create_date}　　作成者：{minutes.get('作成者氏名') or '　　　　'}")
     doc.add_paragraph("")
 
-    # 発言内容
-    doc.add_heading("■ 発言内容", level=2)
-    for item in minutes.get("発言内容", []):
-        p = doc.add_paragraph()
-        run_speaker = p.add_run(f"【{item.get('話者', '')}】 ")
-        run_speaker.bold = True
-        run_speaker.font.size = Pt(10.5)
-        run_content = p.add_run(item.get("内容", ""))
-        run_content.font.size = Pt(10.5)
+    FIELDS = [
+        ("全体の状況",         minutes.get("全体の状況", "")),
+        ("本人の感想・満足度",  minutes.get("本人の感想・満足度", "")),
+        ("到達目標",           minutes.get("到達目標", "")),
+        ("達成状況の評価",     _fmt_achievement(minutes.get("達成状況の評価", {}))),
+        ("達成されない原因の分析", minutes.get("達成されない原因の分析", "")),
+        ("今後の対応",         minutes.get("今後の対応", "")),
+        ("その他留意事項",     minutes.get("その他留意事項", "特になし")),
+    ]
 
-    doc.add_paragraph("")
+    for label, value in FIELDS:
+        h = doc.add_paragraph()
+        run_h = h.add_run(f"■ {label}")
+        run_h.bold = True
+        run_h.font.size = Pt(10.5)
+        run_h.font.color.rgb = RGBColor(0x1a, 0x1a, 0x2e)
 
-    # 要約
-    doc.add_heading("■ 要約", level=2)
-    doc.add_paragraph(minutes.get("要約", ""))
-
-    # 確認事項
-    items = minutes.get("確認事項", [])
-    if items:
+        body = doc.add_paragraph(value or "—")
+        body.runs[0].font.size = Pt(10.5)
         doc.add_paragraph("")
-        doc.add_heading("■ 確認事項", level=2)
-        for item in items:
-            doc.add_paragraph(f"・{item}")
+
+
+def _fmt_achievement(v) -> str:
+    if isinstance(v, dict):
+        判定 = v.get("判定", "")
+        詳細 = v.get("詳細", "")
+        return f"【{判定}】{詳細}" if 判定 else 詳細
+    return str(v) if v else ""
+
+
+def to_word(minutes: dict, existing_bytes: bytes | None = None) -> bytes:
+    """
+    existing_bytes が None → 新規作成
+    existing_bytes が指定 → 既存 docx の末尾に改ページ＋追記
+    """
+    if existing_bytes:
+        doc = Document(io.BytesIO(existing_bytes))
+        _add_page_break(doc)
+    else:
+        doc = Document()
+
+    _write_monitoring_to_doc(doc, minutes)
 
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
 
 
-# ─── Excel 出力 ──────────────────────────────────────────────
-
-_HEADER_COLOR = "4A6CF7"
-_LIGHT_BG = "F0F4FF"
+# ══════════════════════════════════════════════════════════
+#  Excel 出力
+# ══════════════════════════════════════════════════════════
 
 def _thin_border() -> Border:
     side = Side(style="thin", color="CCCCCC")
     return Border(left=side, right=side, top=side, bottom=side)
 
 
-def to_excel(minutes: dict) -> bytes:
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "面談記録"
+def _header_style(cell, text: str) -> None:
+    cell.value = text
+    cell.font = Font(bold=True, color=_WHITE, size=11)
+    cell.fill = PatternFill("solid", fgColor=_HEADER_COLOR)
+    cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
 
-    # 列幅
-    ws.column_dimensions["A"].width = 16
-    ws.column_dimensions["B"].width = 70
 
-    row = 1
+def _data_style(cell, text: str, bg: bool = False) -> None:
+    cell.value = text
+    cell.font = Font(size=10)
+    cell.fill = PatternFill("solid", fgColor=_LIGHT_BG if bg else _WHITE)
+    cell.border = _thin_border()
+    cell.alignment = Alignment(vertical="top", wrap_text=True)
 
-    def _header_row(label: str) -> None:
+
+def _append_monitoring_to_sheet(ws, minutes: dict, start_row: int) -> int:
+    """1件分をシートの start_row から書き込み、次の開始行を返す"""
+
+    today = date.today().strftime("%Y年%m月%d日")
+    create_date = minutes.get("作成日") or today
+
+    ws.column_dimensions["A"].width = 22
+    ws.column_dimensions["B"].width = 65
+
+    row = start_row
+
+    def header_row(label: str) -> None:
         nonlocal row
-        cell = ws.cell(row=row, column=1, value=label)
+        c = ws.cell(row=row, column=1, value=label)
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
-        cell.font = Font(bold=True, color="FFFFFF", size=11)
-        cell.fill = PatternFill("solid", fgColor=_HEADER_COLOR)
-        cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        _header_style(c, label)
         ws.row_dimensions[row].height = 20
         row += 1
 
-    def _data_row(label: str, value: str, bg: bool = False) -> None:
+    def data_row(label: str, value: str, bg: bool = False, height: int = 15) -> None:
         nonlocal row
         c1 = ws.cell(row=row, column=1, value=label)
         c2 = ws.cell(row=row, column=2, value=value)
-        for c in (c1, c2):
-            c.border = _thin_border()
-            c.alignment = Alignment(vertical="top", wrap_text=True)
-            if bg:
-                c.fill = PatternFill("solid", fgColor=_LIGHT_BG)
         c1.font = Font(bold=True, size=10)
-        c2.font = Font(size=10)
-        ws.row_dimensions[row].height = 15
+        c1.border = _thin_border()
+        c1.alignment = Alignment(vertical="top", wrap_text=True)
+        c1.fill = PatternFill("solid", fgColor=_LIGHT_BG if bg else _WHITE)
+        _data_style(c2, value, bg)
+        ws.row_dimensions[row].height = height
         row += 1
 
     # 基本情報
-    _header_row("■ 基本情報")
-    interview_date = minutes.get("面談日") or date.today().strftime("%Y年%m月%d日")
-    _data_row("面談日", interview_date)
-    participants = "、".join(minutes.get("参加者", []))
-    _data_row("参加者", participants, bg=True)
-    row += 1
+    header_row("■ 基本情報")
+    data_row("利用者氏名",  minutes.get("利用者氏名") or "")
+    data_row("作成日",      create_date, bg=True)
+    data_row("作成者氏名",  minutes.get("作成者氏名") or "")
+    row += 1  # 空行
 
-    # 発言内容
-    _header_row("■ 発言内容")
-    for i, item in enumerate(minutes.get("発言内容", [])):
-        _data_row(item.get("話者", ""), item.get("内容", ""), bg=(i % 2 == 1))
-        ws.row_dimensions[row - 1].height = max(15, len(item.get("内容", "")) // 4)
-    row += 1
+    # 各項目
+    FIELDS = [
+        ("全体の状況",            minutes.get("全体の状況", ""),          60),
+        ("本人の感想・満足度",     minutes.get("本人の感想・満足度", ""),   60),
+        ("到達目標",              minutes.get("到達目標", ""),             40),
+        ("達成状況の評価",        _fmt_achievement(minutes.get("達成状況の評価", {})), 40),
+        ("達成されない原因の分析", minutes.get("達成されない原因の分析", ""), 40),
+        ("今後の対応",            minutes.get("今後の対応", ""),           50),
+        ("その他留意事項",        minutes.get("その他留意事項", "特になし"), 30),
+    ]
 
-    # 要約
-    _header_row("■ 要約")
-    summary = minutes.get("要約", "")
-    c1 = ws.cell(row=row, column=1, value="要約")
-    c2 = ws.cell(row=row, column=2, value=summary)
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=1)
-    for c in (c1, c2):
-        c.border = _thin_border()
-        c.alignment = Alignment(vertical="top", wrap_text=True)
-    c1.font = Font(bold=True, size=10)
-    c2.font = Font(size=10)
-    ws.row_dimensions[row].height = 60
-    row += 2
+    for i, (label, value, h) in enumerate(FIELDS):
+        header_row(f"■ {label}")
+        data_row("", value, bg=False, height=h)
+        row += 1  # 空行
 
-    # 確認事項
-    items = minutes.get("確認事項", [])
-    if items:
-        _header_row("■ 確認事項")
-        for i, item in enumerate(items):
-            _data_row(f"確認{i+1}", item, bg=(i % 2 == 1))
+    return row  # 次回の開始行
+
+
+def to_excel(minutes: dict, existing_bytes: bytes | None = None) -> bytes:
+    """
+    existing_bytes が None → 新規作成
+    existing_bytes が指定 → 既存 xlsx の末尾に追記
+    """
+    if existing_bytes:
+        wb = openpyxl.load_workbook(io.BytesIO(existing_bytes))
+        ws = wb.active
+        # 既存の最終行を探して空行2行あけて追記
+        max_row = ws.max_row
+        start_row = max_row + 3
+    else:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "モニタリング報告書"
+        start_row = 1
+
+    _append_monitoring_to_sheet(ws, minutes, start_row)
 
     buf = io.BytesIO()
     wb.save(buf)
