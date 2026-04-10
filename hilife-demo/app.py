@@ -94,6 +94,7 @@ st.markdown(
     "<p style='text-align:center;color:#666'>面談音声をアップロードするだけで、議事録をWord/Excelで出力します</p>",
     unsafe_allow_html=True,
 )
+st.info("⚠️ **1ファイルの上限は25MB（目安：約30分以内）です。**\n\n1時間の面談は前半・後半に分けて、2回アップロードしてください。", icon=None)
 st.divider()
 
 # ─── STEP 1: ファイルアップロード ──────────────────────────────
