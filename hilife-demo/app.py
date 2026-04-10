@@ -203,27 +203,50 @@ if run_btn and audio_bytes:
     st.divider()
     st.markdown("### 📋 モニタリング報告書 プレビュー")
 
-    col1, col2 = st.columns(2)
-    col1.markdown(f"**利用者氏名**: {minutes.get('利用者氏名') or '—'}")
-    col2.markdown(f"**作成日**: {minutes.get('作成日') or '—'}")
-    col1.markdown(f"**作成者**: {minutes.get('作成者氏名') or '—'}")
+    a = minutes.get("A_基本情報", {})
+    b = minutes.get("B_支援計画", {})
+    c = minutes.get("C_モニタリング結果", {})
 
-    achievement = minutes.get("達成状況の評価", {})
+    # 基本情報サマリー
+    col1, col2, col3 = st.columns(3)
+    col1.markdown(f"**利用者氏名**: {a.get('利用者氏名') or '—'}")
+    col2.markdown(f"**実施日**: {a.get('モニタリング実施日') or '—'}")
+    col3.markdown(f"**作成者**: {a.get('作成者氏名') or '—'}")
+
+    achievement = c.get("達成状況の評価", {})
     判定 = achievement.get("判定", "") if isinstance(achievement, dict) else str(achievement)
     badge = {"達成": "🟢", "一部達成": "🟡", "未達成": "🔴"}.get(判定, "⚪")
-    st.markdown(f"**達成状況**: {badge} {判定}")
+    変更 = c.get("計画変更の要否", "")
+    変更badge = "🔴 要" if 変更 == "要" else "🟢 不要"
+    col1.markdown(f"**達成状況**: {badge} {判定}")
+    col2.markdown(f"**計画変更**: {変更badge}")
+    col3.markdown(f"**次回予定**: {c.get('次回モニタリング予定日') or '—'}")
 
-    PREVIEW_FIELDS = [
-        ("全体の状況",         minutes.get("全体の状況", "")),
-        ("本人の感想・満足度",  minutes.get("本人の感想・満足度", "")),
-        ("到達目標",           minutes.get("到達目標", "")),
-        ("達成状況（詳細）",   achievement.get("詳細", "") if isinstance(achievement, dict) else ""),
-        ("達成されない原因",   minutes.get("達成されない原因の分析", "")),
-        ("今後の対応",         minutes.get("今後の対応", "")),
-        ("その他留意事項",     minutes.get("その他留意事項", "")),
+    st.markdown("---")
+
+    # A. 基本情報
+    with st.expander("▶ A. 基本情報", expanded=False):
+        st.markdown(f"- 前回実施日: {a.get('前回モニタリング実施日') or '—'}")
+        st.markdown(f"- 個別支援計画作成日: {a.get('個別支援計画作成日') or '—'}")
+
+    # B. 支援計画
+    with st.expander("▶ B. 支援計画", expanded=False):
+        st.markdown(f"**支援の全体方針**: {b.get('支援の全体方針') or '—'}")
+        st.markdown(f"**長期目標**: {b.get('長期目標') or '—'}")
+        st.markdown(f"**短期目標**: {b.get('短期目標') or '—'}")
+
+    # C. モニタリング結果
+    C_FIELDS = [
+        ("全体の状況",            c.get("全体の状況", "")),
+        ("本人の感想・満足度",    c.get("本人の感想・満足度", "")),
+        ("家族・保護者の意向",    c.get("家族・保護者の意向", "")),
+        ("達成状況の評価",        f"【{判定}】{achievement.get('詳細','')}" if isinstance(achievement,dict) else str(achievement)),
+        ("達成されない原因の分析", c.get("達成されない原因の分析", "")),
+        ("今後の対応・支援方針",  c.get("今後の対応・支援方針", "")),
+        ("その他留意事項",        c.get("その他留意事項", "")),
     ]
-    for label, value in PREVIEW_FIELDS:
-        if value and value != "該当なし":
+    for label, value in C_FIELDS:
+        if value and value not in ("該当なし", "特になし", "面談中言及なし"):
             with st.expander(f"▶ {label}", expanded=False):
                 st.write(value)
 
@@ -234,8 +257,8 @@ if run_btn and audio_bytes:
         unsafe_allow_html=True,
     )
 
-    name = minutes.get("利用者氏名", "").replace(" ", "") or "報告書"
-    create_date = (minutes.get("作成日") or "").replace("年", "").replace("月", "").replace("日", "")
+    name = a.get("利用者氏名", "").replace(" ", "") or "報告書"
+    create_date = (a.get("モニタリング実施日") or "").replace("年", "").replace("月", "").replace("日", "")
     file_stem = f"モニタリング報告書_{name}_{create_date}" if create_date else f"モニタリング報告書_{name}"
 
     existing_word_bytes = existing_word.getvalue() if existing_word else None
