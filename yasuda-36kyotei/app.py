@@ -1,6 +1,6 @@
 """
 36協定自動化ツール - Streamlit Webアプリ
-社労士事務所向け。Excelアップロード → Word協定書生成 → メール送信
+社労士事務所向け。Excelアップロード → Word+PDF協定書生成 → Yahoo Mail 下書き一括保存（PDF添付）
 """
 import base64
 import io
@@ -15,7 +15,9 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent))
 from excel_reader import read_excel
 from word_generator import generate_word, FORM_NAMES
-from mail_sender import create_email, send_email, build_email_body, build_subject
+from pdf_generator import generate_pdf, _safe_filename
+from mail_drafter import save_draft
+from mail_sender import build_email_body, build_subject
 
 # ============================================================
 # ページ設定
@@ -128,95 +130,137 @@ def check_password() -> bool:
 
 
 # ============================================================
-# SMTP設定をSecretsから取得
+# Yahoo IMAP設定をSecretsから取得（セッション間でキャッシュ）
 # ============================================================
-def get_smtp_config() -> dict:
-    keys = ["smtp_server", "smtp_port", "smtp_user", "smtp_password",
-            "from_address", "差出人名", "差出人所属", "差出人電話"]
+@st.cache_resource
+def get_imap_config() -> dict:
+    keys = ["yahoo_user", "yahoo_password", "差出人名", "差出人所属", "差出人電話"]
     config = {}
     for k in keys:
         try:
             config[k] = st.secrets[k]
         except Exception:
             config[k] = os.environ.get(k.upper(), "")
-
-    if not config.get("smtp_server"):
-        config["smtp_server"] = "smtp.gmail.com"
-    if not config.get("smtp_port"):
-        config["smtp_port"] = 587
-
     return config
 
 
 # ============================================================
-# Word生成 → ZIPバイナリ＋ファイルbytes辞書を返す
+# Word + PDF 生成 → 各ZIPバイナリとファイルbytes辞書を返す
 # ============================================================
-def generate_files(records: list[dict]) -> tuple[bytes, dict[str, bytes], list[dict]]:
+def generate_all_files(
+    records: list[dict],
+) -> tuple[bytes, bytes, dict[str, bytes], dict[str, bytes], list[dict]]:
+    """Word ZIP・PDF ZIP・個別bytes辞書・結果を返す
+
+    Returns:
+        word_zip_bytes, pdf_zip_bytes, word_file_bytes, pdf_file_bytes, results
+    """
     results = []
-    zip_buffer = io.BytesIO()
-    file_bytes: dict[str, bytes] = {}
+    word_zip_buf = io.BytesIO()
+    pdf_zip_buf = io.BytesIO()
+    word_file_bytes: dict[str, bytes] = {}
+    pdf_file_bytes: dict[str, bytes] = {}
 
     with tempfile.TemporaryDirectory() as tmpdir, \
-         zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+         zipfile.ZipFile(word_zip_buf, "w", zipfile.ZIP_DEFLATED) as word_zf, \
+         zipfile.ZipFile(pdf_zip_buf, "w", zipfile.ZIP_DEFLATED) as pdf_zf:
+
         for i, record in enumerate(records):
             name = record.get("事業所名", f"企業{i+1}")
             form_type = record.get("様式パターン", "9")
             form_label = FORM_NAMES.get(form_type, form_type)
+            error_msg = ""
 
+            # Word生成
+            word_ok = False
             try:
                 out_path = generate_word(record, output_dir=tmpdir)
-                filename = Path(out_path).name
+                word_filename = Path(out_path).name
                 with open(out_path, "rb") as f:
-                    file_bytes[filename] = f.read()
-                zf.write(out_path, arcname=filename)
-                results.append({"事業所名": name, "様式": form_label, "結果": "✅ 生成完了", "エラー": ""})
+                    word_bytes = f.read()
+                word_file_bytes[word_filename] = word_bytes
+                word_zf.write(out_path, arcname=word_filename)
+                word_ok = True
             except Exception as e:
-                results.append({"事業所名": name, "様式": form_label, "結果": "❌ 失敗", "エラー": str(e)})
+                error_msg = f"Word: {e}"
 
-    return zip_buffer.getvalue(), file_bytes, results
+            # PDF生成
+            pdf_ok = False
+            try:
+                safe_name = _safe_filename(name)
+                pdf_filename = f"36協定書_{safe_name}_{form_type}.pdf"
+                pdf_bytes = generate_pdf(record)
+                pdf_file_bytes[pdf_filename] = pdf_bytes
+                pdf_tmp = Path(tmpdir) / pdf_filename
+                pdf_tmp.write_bytes(pdf_bytes)
+                pdf_zf.write(str(pdf_tmp), arcname=pdf_filename)
+                pdf_ok = True
+            except Exception as e:
+                error_msg += f" PDF: {e}"
+
+            if word_ok and pdf_ok:
+                status = "✅ 生成完了"
+            elif word_ok or pdf_ok:
+                status = "⚠️ 一部失敗"
+            else:
+                status = "❌ 失敗"
+
+            results.append({
+                "事業所名": name,
+                "様式": form_label,
+                "Word": "✅" if word_ok else "❌",
+                "PDF": "✅" if pdf_ok else "❌",
+                "エラー": error_msg,
+            })
+
+    return (
+        word_zip_buf.getvalue(),
+        pdf_zip_buf.getvalue(),
+        word_file_bytes,
+        pdf_file_bytes,
+        results,
+    )
 
 
 # ============================================================
-# メール一括送信
+# Yahoo Mail 下書き一括保存（PDF添付）
 # ============================================================
-def send_all_emails(records: list[dict], file_bytes: dict[str, bytes], smtp_config: dict) -> list[dict]:
+def save_all_drafts(
+    records: list[dict],
+    pdf_file_bytes: dict[str, bytes],
+    imap_config: dict,
+) -> list[dict]:
     results = []
-    with tempfile.TemporaryDirectory() as tmpdir:
-        for record in records:
-            name = record.get("事業所名", "")
-            email_addr = record.get("メールアドレス", "")
-            form_type = record.get("様式パターン", "9")
-            form_label = FORM_NAMES.get(form_type, form_type)
-            filename = f"36協定書_{name}_{form_label}.docx"
+    for record in records:
+        name = record.get("事業所名", "")
+        email_addr = record.get("メールアドレス", "")
+        form_type = record.get("様式パターン", "9")
+        safe_name = _safe_filename(name)
+        pdf_filename = f"36協定書_{safe_name}_{form_type}.pdf"
 
-            if not email_addr:
-                results.append({"事業所名": name, "宛先": "（未設定）", "結果": "⚠️ メールアドレスなし"})
-                continue
+        if not email_addr:
+            results.append({"事業所名": name, "宛先": "（未設定）", "結果": "⚠️ メールアドレスなし"})
+            continue
 
-            attachment_path = None
-            if filename in file_bytes:
-                tmp_path = Path(tmpdir) / filename
-                tmp_path.write_bytes(file_bytes[filename])
-                attachment_path = str(tmp_path)
+        pdf_bytes = pdf_file_bytes.get(pdf_filename)
+        if not pdf_bytes:
+            results.append({"事業所名": name, "宛先": email_addr, "結果": "❌ PDFが見つかりません"})
+            continue
 
-            subject = build_subject(record)
-            body = build_email_body(record, smtp_config)
-            msg = create_email(
-                to_address=email_addr,
-                subject=subject,
-                body=body,
-                attachment_path=attachment_path,
-                from_address=smtp_config.get("from_address", ""),
-            )
-            send_result = send_email(
-                msg,
-                smtp_server=smtp_config.get("smtp_server", "smtp.gmail.com"),
-                smtp_port=int(smtp_config.get("smtp_port", 587)),
-                username=smtp_config.get("smtp_user", ""),
-                password=smtp_config.get("smtp_password", ""),
-                dry_run=False,
-            )
-            results.append({"事業所名": name, "宛先": email_addr, "結果": send_result["status"]})
+        subject = build_subject(record)
+        body = build_email_body(record, imap_config)
+
+        res = save_draft(
+            to_address=email_addr,
+            subject=subject,
+            body=body,
+            pdf_bytes=pdf_bytes,
+            pdf_filename=pdf_filename,
+            imap_user=imap_config.get("yahoo_user", ""),
+            imap_password=imap_config.get("yahoo_password", ""),
+            from_address=imap_config.get("yahoo_user", ""),
+        )
+        results.append({"事業所名": name, "宛先": email_addr, "結果": res["status"]})
 
     return results
 
@@ -234,20 +278,24 @@ def main() -> None:
             <img src="data:image/jpeg;base64,{logo_b64}" style="height:64px; width:64px; object-fit:contain; border-radius:50%;">
         </div>""", unsafe_allow_html=True)
     st.markdown('<div class="main-title">36協定自動化ツール</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-title">Excelをアップロードするだけで、36協定書（Word）の生成・メール送信が完了します</div>',
+    st.markdown('<div class="sub-title">Excelをアップロードするだけで、36協定書（Word・PDF）の生成・メール下書き保存が完了します</div>',
                 unsafe_allow_html=True)
 
     # session_state 初期化
-    if "generated_files" not in st.session_state:
-        st.session_state.generated_files = {}
-    if "zip_bytes" not in st.session_state:
-        st.session_state.zip_bytes = None
+    if "word_file_bytes" not in st.session_state:
+        st.session_state.word_file_bytes = {}
+    if "pdf_file_bytes" not in st.session_state:
+        st.session_state.pdf_file_bytes = {}
+    if "word_zip_bytes" not in st.session_state:
+        st.session_state.word_zip_bytes = None
+    if "pdf_zip_bytes" not in st.session_state:
+        st.session_state.pdf_zip_bytes = None
     if "gen_results" not in st.session_state:
         st.session_state.gen_results = []
     if "records" not in st.session_state:
         st.session_state.records = []
-    if "send_results" not in st.session_state:
-        st.session_state.send_results = []
+    if "draft_results" not in st.session_state:
+        st.session_state.draft_results = []
 
     # --------------------------------------------------------
     # STEP 1: Excel アップロード
@@ -273,11 +321,13 @@ def main() -> None:
     # ファイルが差し替わったらsession_stateをリセット
     if "last_filename" not in st.session_state or st.session_state.last_filename != uploaded.name:
         st.session_state.last_filename = uploaded.name
-        st.session_state.generated_files = {}
-        st.session_state.zip_bytes = None
+        st.session_state.word_file_bytes = {}
+        st.session_state.pdf_file_bytes = {}
+        st.session_state.word_zip_bytes = None
+        st.session_state.pdf_zip_bytes = None
         st.session_state.gen_results = []
         st.session_state.records = []
-        st.session_state.send_results = []
+        st.session_state.draft_results = []
 
     # Excel 読み取り
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
@@ -329,7 +379,6 @@ def main() -> None:
 
     # 全列展開式
     with st.expander("📊 全データを確認する（クリックで展開）"):
-        # 内部キー（様式パターン等）を除外して表示
         exclude_keys = {"様式パターン"}
         display_records = [
             {k: v for k, v in r.items() if k not in exclude_keys}
@@ -338,55 +387,68 @@ def main() -> None:
         st.dataframe(display_records, use_container_width=True, hide_index=True)
 
     # --------------------------------------------------------
-    # STEP 3: Word生成 & ダウンロード
+    # STEP 3: Word + PDF 生成 & ダウンロード
     # --------------------------------------------------------
     st.markdown("""
     <div class="step-box">
         <div class="step-label">STEP 3</div>
-        <div class="step-title">📝 Word協定書を一括生成してダウンロード</div>
+        <div class="step-title">📝 Word・PDF協定書を一括生成してダウンロード</div>
     </div>
     """, unsafe_allow_html=True)
 
-    if st.button("⚡ Word協定書を生成する", type="primary", use_container_width=True):
-        with st.spinner("協定書を生成しています…"):
-            zip_bytes, file_bytes, gen_results = generate_files(records)
-        st.session_state.zip_bytes = zip_bytes
-        st.session_state.generated_files = file_bytes
+    if st.button("⚡ Word + PDF を生成する", type="primary", use_container_width=True):
+        with st.spinner("協定書を生成しています（Word + PDF）…"):
+            word_zip, pdf_zip, word_bytes, pdf_bytes, gen_results = generate_all_files(records)
+        st.session_state.word_zip_bytes = word_zip
+        st.session_state.pdf_zip_bytes = pdf_zip
+        st.session_state.word_file_bytes = word_bytes
+        st.session_state.pdf_file_bytes = pdf_bytes
         st.session_state.gen_results = gen_results
-        st.session_state.send_results = []  # 再生成時はメール結果をリセット
+        st.session_state.draft_results = []  # 再生成時は下書き結果をリセット
 
     if st.session_state.gen_results:
-        success_count = sum(1 for r in st.session_state.gen_results if "✅" in r["結果"])
+        success_count = sum(1 for r in st.session_state.gen_results if "✅" in r["Word"] and "✅" in r["PDF"])
         fail_count = len(st.session_state.gen_results) - success_count
 
         if fail_count == 0:
-            st.markdown(f'<div class="result-card">✅ <strong>{success_count} 件</strong> すべて生成完了しました。</div>',
+            st.markdown(f'<div class="result-card">✅ <strong>{success_count} 件</strong> すべて生成完了しました（Word・PDF）。</div>',
                         unsafe_allow_html=True)
         else:
             st.warning(f"{success_count} 件成功 / {fail_count} 件失敗")
 
         st.dataframe(st.session_state.gen_results, use_container_width=True, hide_index=True)
 
-        if st.session_state.zip_bytes and success_count > 0:
-            st.download_button(
-                label="📥 協定書をまとめてダウンロード（ZIP）",
-                data=st.session_state.zip_bytes,
-                file_name="36協定書_一括.zip",
-                mime="application/zip",
-                use_container_width=True,
-            )
+        col_w, col_p = st.columns(2)
+        with col_w:
+            if st.session_state.word_zip_bytes:
+                st.download_button(
+                    label="📥 Word ZIP をダウンロード",
+                    data=st.session_state.word_zip_bytes,
+                    file_name="36協定書_Word一括.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                )
+        with col_p:
+            if st.session_state.pdf_zip_bytes:
+                st.download_button(
+                    label="📥 PDF ZIP をダウンロード",
+                    data=st.session_state.pdf_zip_bytes,
+                    file_name="36協定書_PDF一括.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                )
 
     # --------------------------------------------------------
-    # STEP 4: メール送信（Word生成完了後のみ表示）
+    # STEP 4: Yahoo Mail 下書き一括保存（PDF生成完了後のみ表示）
     # --------------------------------------------------------
-    if not st.session_state.generated_files:
+    if not st.session_state.pdf_file_bytes:
         _show_footer()
         return
 
     st.markdown("""
     <div class="step-box">
         <div class="step-label">STEP 4</div>
-        <div class="step-title">✉️ 協定書をメールで一括送信</div>
+        <div class="step-title">✉️ 協定書（PDF）をメール下書きに一括保存</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -400,45 +462,46 @@ def main() -> None:
             "事業所名": name,
             "宛先メール": email_addr if email_addr else "⚠️ 未設定",
             "件名": subject,
+            "添付": "PDF",
         })
 
-    st.markdown("**送信予定の一覧**")
+    st.markdown("**下書き保存予定の一覧**")
     st.dataframe(send_preview, use_container_width=True, hide_index=True)
 
-    # SMTP設定確認
-    smtp_config = get_smtp_config()
-    smtp_ok = bool(smtp_config.get("smtp_user") and smtp_config.get("smtp_password"))
+    # IMAP設定確認
+    imap_config = get_imap_config()
+    imap_ok = bool(imap_config.get("yahoo_user") and imap_config.get("yahoo_password"))
 
-    if not smtp_ok:
-        st.error("⚠️ メール送信の設定が完了していません。管理者に連絡してください。（SMTP設定未反映）")
+    if not imap_ok:
+        st.error("⚠️ Yahoo Mail の設定が完了していません。管理者に連絡してください。（yahoo_user / yahoo_password 未設定）")
         _show_footer()
         return
 
-    st.info(f"📤 送信元: **{smtp_config.get('from_address', smtp_config.get('smtp_user', ''))}**")
+    st.info(f"📤 差出人アカウント: **{imap_config.get('yahoo_user', '')}**")
 
-    confirmed = st.checkbox("上記の宛先にメールを送信することを確認しました")
+    confirmed = st.checkbox("上記の宛先にメール下書きを保存することを確認しました")
 
     if confirmed:
-        if st.button("📨 メールを一括送信する", type="primary", use_container_width=True):
-            with st.spinner("メールを送信しています…"):
-                send_results = send_all_emails(
+        if st.button("📨 メール下書きを一括保存する", type="primary", use_container_width=True):
+            with st.spinner("Yahoo Mail の下書きフォルダに保存しています…"):
+                draft_results = save_all_drafts(
                     st.session_state.records,
-                    st.session_state.generated_files,
-                    smtp_config,
+                    st.session_state.pdf_file_bytes,
+                    imap_config,
                 )
-            st.session_state.send_results = send_results
+            st.session_state.draft_results = draft_results
 
-    if st.session_state.send_results:
-        mail_ok = sum(1 for r in st.session_state.send_results if "成功" in r["結果"])
-        mail_fail = len(st.session_state.send_results) - mail_ok
+    if st.session_state.draft_results:
+        ok_count = sum(1 for r in st.session_state.draft_results if "成功" in r["結果"])
+        fail_count = len(st.session_state.draft_results) - ok_count
 
-        if mail_fail == 0:
-            st.markdown(f'<div class="result-card">✅ <strong>{mail_ok} 件</strong> すべて送信完了しました。</div>',
+        if fail_count == 0:
+            st.markdown(f'<div class="result-card">✅ <strong>{ok_count} 件</strong> すべて下書き保存しました。Yahoo Mail の下書きフォルダをご確認ください。</div>',
                         unsafe_allow_html=True)
         else:
-            st.warning(f"{mail_ok} 件送信成功 / {mail_fail} 件失敗")
+            st.warning(f"{ok_count} 件保存成功 / {fail_count} 件失敗")
 
-        st.dataframe(st.session_state.send_results, use_container_width=True, hide_index=True)
+        st.dataframe(st.session_state.draft_results, use_container_width=True, hide_index=True)
 
     _show_footer()
 
