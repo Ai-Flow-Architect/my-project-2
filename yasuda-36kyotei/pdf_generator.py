@@ -114,7 +114,8 @@ def _ve(r: dict, key: str, default: str = "") -> str:
 def _start_date(r: dict) -> str:
     y = _v(r, "起算日_年") or "〇"
     m = _v(r, "起算日_月") or "〇"
-    return f"令和{y}年{m}月1日"
+    d = _v(r, "起算日_日") or "1"  # S5: C社は21日始まり等に対応
+    return f"令和{y}年{m}月{d}日"
 
 
 def _has_special(r: dict) -> bool:
@@ -130,10 +131,39 @@ def _is_1nen(r: dict) -> bool:
 # テーブル生成（サンプルPDFに完全準拠）
 # ═══════════════════════════════════════════════════
 def _overtime_table(r: dict) -> str:
+    """時間外労働テーブル（複数業種行対応: _2/_3/_4サフィックス）"""
     m = _ve(r, "起算日_月")
-    y = _ve(r, "起算日_年")
-    期間  = _ve(r, "時間外_期間")
     limit = "320" if _is_1nen(r) else "360"
+
+    # 複数行収集（サフィックスなし=1行目、_2/_3/_4=追加行）
+    data_rows: list[dict] = []
+    for suf in ["", "_2", "_3", "_4"]:
+        事由 = _v(r, f"時間外_事由{suf}")
+        if not 事由 and suf:
+            break
+        if 事由:
+            data_rows.append({
+                "事由": _ve(r, f"時間外_事由{suf}"),
+                "業務": _ve(r, f"時間外_業務の種類{suf}"),
+                "人数": _ve(r, f"労働者数{suf}"),
+                "1日": _ve(r, f"延長時間_1日{suf}"),
+                "1月": _ve(r, f"延長時間_1ヶ月{suf}"),
+                "期間": _ve(r, f"時間外_期間{suf}"),
+            })
+    if not data_rows:
+        data_rows = [{"事由": "", "業務": "", "人数": "", "1日": "", "1月": "", "期間": ""}]
+
+    n = len(data_rows)
+    first = data_rows[0]
+    extra_rows = "".join(f"""    <tr>
+      <td class="tl">{row['事由']}</td>
+      <td class="tl">{row['業務']}</td>
+      <td>{row['人数']}人</td>
+      <td>{row['1日']}時間</td>
+      <td>{row['1月']}時間</td>
+      <td>{limit}時間</td>
+      <td class="tl">{row['期間']}</td>
+    </tr>""" for row in data_rows[1:])
 
     return f"""
 <table>
@@ -167,15 +197,16 @@ def _overtime_table(r: dict) -> str:
   </thead>
   <tbody>
     <tr>
-      <td style="font-size:9pt; line-height:1.3;">①下記の②に<br>該当しない<br>労働者</td>
-      <td class="tl">{_ve(r,'時間外_事由')}</td>
-      <td class="tl">{_ve(r,'時間外_業務の種類')}</td>
-      <td>{_ve(r,'労働者数')}人</td>
-      <td>{_ve(r,'延長時間_1日')}時間</td>
-      <td>{_ve(r,'延長時間_1ヶ月')}時間</td>
+      <td rowspan="{n}" style="font-size:9pt; line-height:1.3;">①下記の②に<br>該当しない<br>労働者</td>
+      <td class="tl">{first['事由']}</td>
+      <td class="tl">{first['業務']}</td>
+      <td>{first['人数']}人</td>
+      <td>{first['1日']}時間</td>
+      <td>{first['1月']}時間</td>
       <td>{limit}時間</td>
-      <td class="tl">{期間}</td>
+      <td class="tl">{first['期間']}</td>
     </tr>
+    {extra_rows}
     <tr style="height:22pt;">
       <td style="font-size:9pt; line-height:1.3;">②1年単位の<br>変形労働時間制<br>により労働する<br>労働者</td>
       <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
@@ -185,6 +216,37 @@ def _overtime_table(r: dict) -> str:
 
 
 def _holiday_table(r: dict) -> str:
+    """休日労働テーブル（複数業種行対応: _2/_3/_4サフィックス）"""
+    # 複数行収集
+    data_rows: list[dict] = []
+    for suf in ["", "_2", "_3", "_4"]:
+        事由 = _v(r, f"休日_事由{suf}")
+        if not 事由 and suf:
+            break
+        if 事由:
+            日数 = _ve(r, f"休日労働_日数{suf}")
+            時刻 = _ve(r, f"始業終業時刻{suf}")
+            時刻_html = "<br>".join(t.strip() for t in 時刻.split("・") if t.strip()) if "・" in 時刻 else 時刻
+            data_rows.append({
+                "事由": _ve(r, f"休日_事由{suf}"),
+                "業務": _ve(r, f"休日_業務の種類{suf}"),
+                "人数": _ve(r, f"労働者数{suf}"),
+                "休日": _ve(r, f"所定休日{suf}"),
+                "時刻html": f"{日数}<br>{時刻_html}" if 日数 or 時刻 else "",
+                "期間": _ve(r, f"休日_期間{suf}"),
+            })
+    if not data_rows:
+        data_rows = [{"事由": "", "業務": "", "人数": "", "休日": "", "時刻html": "", "期間": ""}]
+
+    rows_html = "".join(f"""    <tr>
+      <td class="tl">{row['事由']}</td>
+      <td class="tl">{row['業務']}</td>
+      <td>{row['人数']}人</td>
+      <td>{row['休日']}</td>
+      <td>{row['時刻html']}</td>
+      <td class="tl">{row['期間']}</td>
+    </tr>""" for row in data_rows)
+
     return f"""
 <table>
   <colgroup>
@@ -206,14 +268,7 @@ def _holiday_table(r: dict) -> str:
     </tr>
   </thead>
   <tbody>
-    <tr>
-      <td class="tl">{_ve(r,'休日_事由')}</td>
-      <td class="tl">{_ve(r,'休日_業務の種類')}</td>
-      <td>{_ve(r,'労働者数')}人</td>
-      <td>{_ve(r,'所定休日')}</td>
-      <td>1か月に{_ve(r,'休日労働_日数')}日<br>{_ve(r,'始業終業時刻')}</td>
-      <td class="tl">{_ve(r,'休日_期間')}</td>
-    </tr>
+    {rows_html}
   </tbody>
 </table>"""
 
@@ -237,7 +292,21 @@ def _special_para(r: dict) -> str:
         措置 = "医師による面接指導"
     return f"""
 <div class="article">
-<p><strong>第７条</strong>　一定期間についての延長時間は1か月45時間とする。但し、{理由}に特に対応が必要な時は、{手続き}を経て1か月{月時間}時間までこれを延長することができる。この場合、延長時間を更に延長する回数と法定労働時間合計は、{回数}回及び{年時間}時間までとし、かつこれが1か月45時間又は1年間360時間を超えた時間外労働に対しての割増率を{割増率}％とする。また、60時間を超えた場合の割増率は50％とする。健康確保措置：{措置}。</p>
+<p><strong>第７条</strong>　一定期間についての延長時間は1か月45時間とする。但し、{理由}に特に対応が必要な時は、{手続き}を経て1か月{月時間}時間までこれを延長することができる。この場合、延長時間を更に延長する回数と法定労働時間合計は、{回数}回及び{年時間}時間までとし、かつこれが1か月45時間又は1年間360時間を超えた時間外労働に対しての割増率を{割増率}％とする。また、60時間を超えた場合の割増率は50％とする。</p>
+</div>"""
+
+
+def _special_para_93(r: dict) -> str:
+    """様式9_3用の特別条項（C社形式・簡略版段落）"""
+    理由   = _ve(r, "特別_理由", "業務の繁忙")
+    月時間 = _ve(r, "特別_延長時間_月", "80")
+    年時間 = _ve(r, "特別_延長時間_年", "720")
+    回数   = _ve(r, "特別_超過回数", "6")
+    割増率 = _ve(r, "特別_割増賃金率", "25")
+    手続き = _ve(r, "特別_手続き", "労使の協議")
+    return f"""
+<div class="article">
+<p><strong>第７条</strong>　{理由}に特に対応が必要な時には、{手続き}を経て1か月に{月時間}時間、1年間を通じて{年時間}時間まで延長することができるものとする。この場合、延長時間を更に延長する回数は{回数}回までとする。延長時間が1か月{月時間}時間及び1年{年時間}時間を超えた場合の割増賃金率は{割増率}とする。また、60時間を超えた場合の割増率は50とする。</p>
 </div>"""
 
 
@@ -254,10 +323,13 @@ def _build_html(r: dict) -> str:
     年号年  = _ve(r, "起算日_年")
     has_sp  = _has_special(r)
 
+    pat = _v(r, "様式パターン", "9")
     # 特別条項ありの場合: 第7条=特別条項段落、第8条=有効期間（計8条構造）
     # 特別条項なしの場合: 第7条=有効期間（計7条構造、サンプルA社準拠）
+    # 様式9_3はC社形式の簡略段落を使用
     if has_sp:
-        art7_8 = f"""{_special_para(r)}
+        sp_para = _special_para_93(r) if pat == "9_3" else _special_para(r)
+        art7_8 = f"""{sp_para}
 
 <div class="article">
 <p><strong>第８条</strong>　本協定の有効期間は、{起算日}から１年間とする。</p>
@@ -319,11 +391,11 @@ def _build_html(r: dict) -> str:
         <col>
       </colgroup>
       <tr>
-        <td style="border:none; white-space:nowrap; vertical-align:bottom; text-align:left; padding:0 4pt 0 0;">（乙）労働者代表　職種</td>
+        <td style="border:none; white-space:nowrap; vertical-align:bottom; text-align:left; padding:0 4pt 0 0;">（乙）労働者代表</td>
         <td style="border:none; border-bottom:1px solid #000; vertical-align:bottom; text-align:left; padding:1pt 6pt;">{代表職}</td>
       </tr>
       <tr>
-        <td style="border:none; white-space:nowrap; vertical-align:bottom; text-align:right; padding:0 4pt 0 0;">署名</td>
+        <td style="border:none; white-space:nowrap; vertical-align:bottom; text-align:right; padding:0 4pt 0 0;">氏名</td>
         <td style="border:none; border-bottom:1px solid #000; vertical-align:bottom; text-align:left; padding:1pt 6pt;">{代表氏名}</td>
       </tr>
     </table>
@@ -473,7 +545,7 @@ def _driver_holiday_table(r: dict) -> str:
       <td class="tl">{_ve(r,'休日_事由')}</td>
       <td class="tl">{_ve(r,'休日_業務の種類')}</td>
       <td>{_ve(r,'労働者数')}人</td>
-      <td>1か月に{_ve(r,'休日労働_日数')}日<br>{_ve(r,'始業終業時刻')}</td>
+      <td>{_ve(r,'休日労働_日数')}<br>{_ve(r,'始業終業時刻')}</td>
       <td class="tl">{_ve(r,'休日_期間')}</td>
     </tr>
   </tbody>
@@ -481,16 +553,24 @@ def _driver_holiday_table(r: dict) -> str:
 
 
 def _driver_special_table(r: dict) -> str:
-    """第4条 特別条項テーブル（ドライバー様式）"""
+    """特別条項テーブル（ドライバー様式: ①②行構造）
+    ①行: 下記②に該当しない労働者（空行）
+    ②行: 自動車の運転の業務に従事する労働者 + 事由 + 業務/人数/時間数
+    """
     月時間 = _ve(r, "特別_延長時間_月", "80")
     年時間 = _ve(r, "特別_延長時間_年", "960")
     回数   = _ve(r, "特別_超過回数", "6")
+    # 特別条項1日は専用フィールド。なければ通常OTの1日を流用
+    d1日   = _ve(r, "特別_延長時間_1日") or _ve(r, "延長時間_1日")
+    理由   = _ve(r, "特別_理由")
+    業務   = _ve(r, "時間外_業務の種類")
+    人数   = _ve(r, "労働者数")
     return f"""
 <table>
   <colgroup>
-    <col style="width:22%"><col style="width:13%"><col style="width:10%">
+    <col style="width:25%"><col style="width:13%"><col style="width:10%">
     <col style="width:7%"><col style="width:8%"><col style="width:8%">
-    <col style="width:10%"><col style="width:11%"><col style="width:11%">
+    <col style="width:10%"><col style="width:10%"><col style="width:9%">
   </colgroup>
   <thead>
     <tr>
@@ -499,7 +579,7 @@ def _driver_special_table(r: dict) -> str:
       <th rowspan="2">従事する労働者数<br>（満18歳以上の者）</th>
       <th colspan="3">延長することができる時間数</th>
       <th rowspan="2">限度時間を超えて労働させることができる回数</th>
-      <th colspan="2">延長できる時間数及び<br>休日労働の時間数</th>
+      <th colspan="2">延長することができる時間数及び休日労働の時間数</th>
     </tr>
     <tr>
       <th>１日</th><th>１か月</th><th>１年</th>
@@ -507,13 +587,17 @@ def _driver_special_table(r: dict) -> str:
     </tr>
   </thead>
   <tbody>
+    <tr style="height:20pt;">
+      <td style="font-size:8.5pt; text-align:left; line-height:1.25;">①<br>下記②に該当しない<br>労働者</td>
+      <td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+    </tr>
     <tr>
-      <td class="tl">{_ve(r,'特別_理由')}</td>
-      <td class="tl">{_ve(r,'時間外_業務の種類')}</td>
-      <td>{_ve(r,'労働者数')}人</td>
-      <td>{_ve(r,'延長時間_1日')}時間</td>
-      <td>{_ve(r,'延長時間_1ヶ月')}時間</td>
-      <td>360時間</td>
+      <td class="tl" style="font-size:8.5pt; line-height:1.25;">②<br>自動車の運転の業務に従事する労働者<br>{理由}</td>
+      <td class="tl">{業務}</td>
+      <td>{人数}人</td>
+      <td>{d1日}時間</td>
+      <td></td>
+      <td></td>
       <td>{回数}回</td>
       <td>{月時間}時間</td>
       <td>{年時間}時間</td>
@@ -606,11 +690,11 @@ def _build_html_driver(r: dict) -> str:
     <table style="width:100%; border-collapse:separate; border-spacing:0; font-size:10pt; line-height:1.4;">
       <colgroup><col style="width:110pt;"><col></colgroup>
       <tr>
-        <td style="border:none; white-space:nowrap; vertical-align:bottom; text-align:left; padding:0 4pt 0 0;">（乙）労働者代表　職種</td>
+        <td style="border:none; white-space:nowrap; vertical-align:bottom; text-align:left; padding:0 4pt 0 0;">（乙）労働者代表</td>
         <td style="border:none; border-bottom:1px solid #000; vertical-align:bottom; text-align:left; padding:1pt 6pt;">{代表職}</td>
       </tr>
       <tr>
-        <td style="border:none; white-space:nowrap; vertical-align:bottom; text-align:right; padding:0 4pt 0 0;">署名</td>
+        <td style="border:none; white-space:nowrap; vertical-align:bottom; text-align:right; padding:0 4pt 0 0;">氏名</td>
         <td style="border:none; border-bottom:1px solid #000; vertical-align:bottom; text-align:left; padding:1pt 6pt;">{代表氏名}</td>
       </tr>
     </table>
@@ -635,11 +719,11 @@ def _sign_section_a3(社名: str, 職名: str, 代表者: str, 代表職: str, �
     <table style="width:100%; border-collapse:separate; border-spacing:0; font-size:10pt; line-height:1.4;">
       <colgroup><col style="width:110pt;"><col></colgroup>
       <tr>
-        <td style="border:none; white-space:nowrap; vertical-align:bottom; text-align:left; padding:0 4pt 0 0;">（乙）労働者代表　職種</td>
+        <td style="border:none; white-space:nowrap; vertical-align:bottom; text-align:left; padding:0 4pt 0 0;">（乙）労働者代表</td>
         <td style="border:none; border-bottom:1px solid #000; vertical-align:bottom; text-align:left; padding:1pt 6pt;">{代表職}</td>
       </tr>
       <tr>
-        <td style="border:none; white-space:nowrap; vertical-align:bottom; text-align:right; padding:0 4pt 0 0;">署名</td>
+        <td style="border:none; white-space:nowrap; vertical-align:bottom; text-align:right; padding:0 4pt 0 0;">氏名</td>
         <td style="border:none; border-bottom:1px solid #000; vertical-align:bottom; text-align:left; padding:1pt 6pt;">{代表氏名}</td>
       </tr>
     </table>
@@ -836,7 +920,8 @@ def _build_html_1nen_driver(r: dict) -> str:
     起算日  = _e(_start_date(r))
     年号年  = _ve(r, "起算日_年")
     所定時間 = _ve(r, "所定労働時間", "〇時間〇分")
-    始業終業_raw = _v(r, "始業終業時刻") or "〇時〇分　〇時〇分"
+    # 第10条用始業終業時刻: 専用フィールド 始業終業時刻_10条 があればそちらを優先
+    始業終業_raw = _v(r, "始業終業時刻_10条") or _v(r, "始業終業時刻") or "〇時〇分　〇時〇分"
     割増率  = _ve(r, "特別_割増賃金率", "25")
     手続き  = _ve(r, "特別_手続き", "労働者代表者との協議による合意")
     措置    = _e(_v(r, "特別_健康措置_内容") or "休日の確保 面接による健康の把握・労働状況の把握・改善指導")
