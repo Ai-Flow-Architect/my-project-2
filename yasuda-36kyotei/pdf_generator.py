@@ -682,27 +682,31 @@ def _chapter2_1nen(r: dict, art_start: int, 起算日: str, 所定時間: str, b
 </div>
 
 <div class="article">
-<p><strong>{art(n+2)}</strong>　前条の期間における休日は、１週に１回の日曜日の休日を確保するものとし、別添の年間カレンダーのとおりとする。尚、特定期間はないものとする。</p>
+<p><strong>{art(n+2)}</strong>　本協定の対象期間は、{起算日}から１年間とする。</p>
 </div>
 
 <div class="article">
-<p><strong>{art(n+3)}</strong>　前条の期間における所定労働日は、前条に定める休日以外の日とする。</p>
+<p><strong>{art(n+3)}</strong>　前条の期間における休日は、{art(n+5)}の期間における初日を起算日とする１週に１日は確保するものとし、別添の年間カレンダーのとおりとする。尚、特定期間はないものとする。</p>
 </div>
 
 <div class="article">
-<p><strong>{art(n+4)}</strong>　変形対象期間における労働時間は、{所定時間}とする。（休憩時間を除く）</p>
+<p><strong>{art(n+4)}</strong>　前条の期間における所定労働日は、前条に定める休日以外の日とする。</p>
 </div>
 
 <div class="article">
-<p><strong>{art(n+5)}</strong>　業務上やむを得ない事由があるときは、前条の用件の範囲内で、従業員の代表の同意を得て同一週内において休日を振り替えることができる。</p>
+<p><strong>{art(n+5)}</strong>　変形対象期間における労働時間は、{所定時間}とする。（休憩時間を除く）</p>
 </div>
 
 <div class="article">
-<p><strong>{art(n+6)}</strong>　本協定に基づく所定労働時間を超えて労働した場合には、就業規則の規定に基づき時間外手当を支払うものとする。</p>
+<p><strong>{art(n+6)}</strong>　業務上やむを得ない事由があるときは、前条の用件の範囲内で、従業員の代表の同意を得て同一週内において休日を振り替えることができる。</p>
 </div>
 
 <div class="article">
-<p><strong>{art(n+7)}</strong>　本協定の有効期間は、{起算日}から1年間とする。</p>
+<p><strong>{art(n+7)}</strong>　本協定に基づく所定労働時間を超えて労働した場合には、就業規則の規定に基づき時間外手当を支払うものとする。</p>
+</div>
+
+<div class="article">
+<p><strong>{art(n+8)}</strong>　本協定の有効期間は、{起算日}から1年間とする。</p>
 </div>"""
 
 

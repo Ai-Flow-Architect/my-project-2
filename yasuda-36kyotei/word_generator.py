@@ -327,49 +327,57 @@ def _generate_chapter2_1nen(
     add_paragraph(doc, "　２．　パートタイマー、アルバイト及び臨時の従業員", size=FONT_SIZE_ARTICLE)
     add_paragraph(doc, "　３．　嘱託雇用者で特に定めた者", size=FONT_SIZE_ARTICLE)
 
-    # 第n+2条: 休日
+    # 第n+2条: 対象期間
     add_paragraph(doc, "")
     add_paragraph(
         doc,
-        f"{art(n+2)}　前条の期間における休日は、１週に１回の日曜日の休日を確保するものとし、"
-        "別添の年間カレンダーのとおりとする。尚、特定期間はないものとする。",
+        f"{art(n+2)}　本協定の対象期間は、{起算日}から１年間とする。",
         size=FONT_SIZE_ARTICLE,
     )
 
-    # 第n+3条: 所定労働日
+    # 第n+3条: 休日
+    add_paragraph(doc, "")
     add_paragraph(
         doc,
-        f"{art(n+3)}　前条の期間における所定労働日は、前条に定める休日以外の日とする。",
+        f"{art(n+3)}　前条の期間における休日は、{art(n+5)}の期間における初日を起算日とする"
+        "１週に１日は確保するものとし、別添の年間カレンダーのとおりとする。尚、特定期間はないものとする。",
         size=FONT_SIZE_ARTICLE,
     )
 
-    # 第n+4条: 変形対象期間の労働時間
+    # 第n+4条: 所定労働日
     add_paragraph(
         doc,
-        f"{art(n+4)}　変形対象期間における労働時間は、{所定時間}とする。（休憩時間を除く）",
+        f"{art(n+4)}　前条の期間における所定労働日は、前条に定める休日以外の日とする。",
         size=FONT_SIZE_ARTICLE,
     )
 
-    # 第n+5条: 休日振替
+    # 第n+5条: 変形対象期間の労働時間
     add_paragraph(
         doc,
-        f"{art(n+5)}　業務上やむを得ない事由があるときは、前条の用件の範囲内で、"
+        f"{art(n+5)}　変形対象期間における労働時間は、{所定時間}とする。（休憩時間を除く）",
+        size=FONT_SIZE_ARTICLE,
+    )
+
+    # 第n+6条: 休日振替
+    add_paragraph(
+        doc,
+        f"{art(n+6)}　業務上やむを得ない事由があるときは、前条の用件の範囲内で、"
         "従業員の代表の同意を得て同一週内において休日を振り替えることができる。",
         size=FONT_SIZE_ARTICLE,
     )
 
-    # 第n+6条: 時間外手当
+    # 第n+7条: 時間外手当
     add_paragraph(
         doc,
-        f"{art(n+6)}　本協定に基づく所定労働時間を超えて労働した場合には、"
+        f"{art(n+7)}　本協定に基づく所定労働時間を超えて労働した場合には、"
         "就業規則の規定に基づき時間外手当を支払うものとする。",
         size=FONT_SIZE_ARTICLE,
     )
 
-    # 第n+7条: 有効期間
+    # 第n+8条: 有効期間
     add_paragraph(
         doc,
-        f"{art(n+7)}　本協定の有効期間は、{起算日}から1年間とする。",
+        f"{art(n+8)}　本協定の有効期間は、{起算日}から1年間とする。",
         size=FONT_SIZE_ARTICLE,
     )
 
