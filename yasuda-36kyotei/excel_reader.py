@@ -63,6 +63,9 @@ COLUMN_MAP: dict[str, int] = {
 # メールアドレス列（デモ用に追加）
 EMAIL_COLUMN: int = 44  # AR列
 
+# 様式パターン手動上書き列（AS列: 10/10_2 など自動判定外を明示指定するときに使用）
+FORM_PATTERN_OVERRIDE_COLUMN: int = 45  # AS列
+
 
 # ---------- 様式判定ルール（優先順位付きリスト構造） ----------
 # 各ルールは (判定関数, 返却値) のタプル。上から順に評価し、最初にTrueを返したルールが適用される。
@@ -146,13 +149,22 @@ def read_excel(file_path: str) -> list[dict[str, str]]:
         email_val = ws.cell(row=row_num, column=EMAIL_COLUMN).value
         record["メールアドレス"] = str(email_val).strip() if email_val else ""
 
+        # 様式パターン手動上書き（AS列）: 10/10_2 など自動判定外を明示指定
+        override_val = ws.cell(row=row_num, column=FORM_PATTERN_OVERRIDE_COLUMN).value
+        override_str = str(override_val).strip() if override_val else ""
+
         # 入力バリデーション
         row_warnings: list[str] = validate_record(record, row_num)
         if row_warnings:
             warnings.extend(row_warnings)
 
-        # 様式パターンを自動判定
-        record["様式パターン"] = detect_form_type(record)
+        # 様式パターンを自動判定（上書き列が入力されていれば優先）
+        if override_str:
+            record["様式パターン"] = override_str
+            logger.debug("行%d: %s → 様式%s (手動上書き)", row_num, record["事業所名"], override_str)
+        else:
+            record["様式パターン"] = detect_form_type(record)
+            logger.debug("行%d: %s → 様式%s", row_num, record["事業所名"], record["様式パターン"])
         logger.debug("行%d: %s → 様式%s", row_num, record["事業所名"], record["様式パターン"])
 
         records.append(record)
