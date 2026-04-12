@@ -73,37 +73,106 @@ def extract_text(pdf_path: str) -> str:
     return "\n".join(page.get_text() for page in doc)
 
 def mask_variables(text: str) -> str:
-    """社名・人名・数値・日付などの変数部分をマスクして固定文言のみ残す"""
+    """社名・人名・数値・日付などの変数部分をマスクして固定文言のみ残す
+    ※ test_with_original_data.py の mask_variables と同期させること（BUG防止）
+    """
     # S2: PDFテキスト抽出の改行・空白ノイズを正規化（weasyprint vs 原本PDF）
-    # テーブル内のセル折り返し行差異を吸収するため、全改行をスペースに統合
-    text = re.sub(r'[ \t　\n\r]+', ' ', text)  # 全ホワイトスペース → 半角1つ
-
-    # 令和X年X月X日 → RDATE（スペース混入対応: 「令和8 年4 月」等）
+    text = re.sub(r'[ \t　\n\r]+', ' ', text)
+    # S18: 全角コロン（：）→ スペース
+    text = text.replace('：', ' ')
+    # S19: 署名欄の構造ラベル（甲）（乙）を除去
+    text = re.sub(r'（[甲乙]）\s*', '', text)
+    # S20: 全角ASCIIアルファベット→半角
+    text = ''.join(
+        chr(ord(c) - 0xFEE0) if ('\uFF21' <= c <= '\uFF3A' or '\uFF41' <= c <= '\uFF5A') else c
+        for c in text
+    )
+    # S18b: 半角コロン時刻区切り（8:00 → "8 00"）
+    text = re.sub(r'(\d{1,2}):(\d{2})(?!\d)', r'\1 \2', text)
+    # S21: CJK文字間の空白除去
+    text = re.sub(r'(?<=[\u3040-\u9FFF\uFF00-\uFFEF])\s+(?=[\u3040-\u9FFF\uFF00-\uFFEF])', '', text)
+    text = re.sub(r'(?<=\d)\s+(?=[\u3040-\u9FFF\uFF00-\uFFEF])', '', text)
+    text = re.sub(r'(?<=[\u3040-\u9FFF\uFF00-\uFFEF])\s+(?=\d)', '', text)
+    # S21b: ASCII大文字とCJKの間のスペース除去
+    text = re.sub(r'(?<=[A-Z])\s+(?=[\u3040-\u9FFF\uFF00-\uFFEF])', '', text)
+    # S21c: 丸付き数字とCJKの間のスペース除去
+    text = re.sub(r'(?<=[\u2460-\u24FF])\s+(?=[\u3040-\u9FFF\uFF00-\uFFEF])', '', text)
+    text = re.sub(r'(?<=[\u3040-\u9FFF\uFF00-\uFFEF])\s+(?=[\u2460-\u24FF])', '', text)
+    # S21d: 句点・読点後のスペース除去
+    text = re.sub(r'([。、])\s+(?=[\u3040-\u9FFF\uFF00-\uFFEF])', r'\1', text)
+    # S34: 「就業規則第の規定」→「就業規則の規定」
+    text = text.replace('就業規則第の規定', '就業規則の規定')
+    # S31: ページ番号が「時間外」に直結したOCRノイズ除去
+    text = re.sub(r'\d+(?=時間外)', '', text)
+    # S13: 単位名内の空白除去
+    text = re.sub(r'時\s+間', '時間', text)
+    text = re.sub(r'か\s+月', 'か月', text)
+    text = re.sub(r'ヶ\s+月', 'ヶ月', text)
+    # S14: 数字とCJK単位の間のスペース除去
+    text = re.sub(r'(\d)\s+(時|分|秒|日|月|年|週|回|円|人|条)', r'\1\2', text)
+    # S15: テーブルヘッダーのCJK文字間スペース
+    text = re.sub(r'始\s+業', '始業', text)
+    text = re.sub(r'終\s+業', '終業', text)
+    text = re.sub(r'休\s+憩', '休憩', text)
+    text = re.sub(r'業\s+務', '業務', text)
+    text = re.sub(r'種\s+類', '種類', text)
+    # S16: 波ダッシュ・チルダ統一
+    text = re.sub(r'\s*[～〜~]\s*', '〜', text)
+    # S17: 中黒（・）除去
+    text = text.replace('・', '')
+    # 令和X年X月X日 → RDATE
     text = re.sub(r'令和\s*\d+\s*年\s*\d+\s*月\s*\d+\s*日', 'RDATE', text)
     text = re.sub(r'令和\s*\d+\s*年\s*\d+\s*月', 'RDATE', text)
-    text = re.sub(r'令和[〇一二三四五六七八九十]+年[〇一二三四五六七八九十]+月', 'RDATE', text)
-    # 〇年〇月パターン
+    text = re.sub(r'令和[〇一二三四五六七八九十]+年[〇一二三四五六七八九十]+月[〇一二三四五六七八九十]+日', 'RDATE', text)
     text = re.sub(r'〇+年〇+月', 'RDATE', text)
-
-    # 数値（時間・回数・パーセント等）スペース混入対応: 「1 週」「1 日」等
+    text = re.sub(r'[〇○]+年[〇○]+月[〇○]+日', 'RDATE', text)
+    # 数値マスク
     text = re.sub(r'\d+[\.,]\d+', 'NUM', text)
     text = re.sub(r'\d+\s*(?:時間|分|回|%|％|円|人|日|週|ヶ月|か月|箇月)', 'NUM', text)
     text = re.sub(r'(?<![第条])\d+', 'NUM', text)
-
-    # 全角数字パターン（条番号以外）
     text = re.sub(r'[０-９]+\s*(?:時間|分|回|％|円|人|日)', 'NUM', text)
-
-    # 会社名・事業所名（株式会社・有限会社・合同会社等を含む文字列）
-    text = re.sub(r'(?:株式会社|有限会社|合同会社|一般社団法人|公益財団法人)\S+', 'COMPANY', text)
-    text = re.sub(r'\S+(?:株式会社|有限会社|合同会社)', 'COMPANY', text)
-
-    # 人名っぽいパターン（〇〇 〇〇 ← 姓名形式）
-    text = re.sub(r'[ぁ-ん一-龥]{1,4}　[ぁ-ん一-龥]{1,4}', 'NAME', text)
-
-    # 役職名（代表取締役等は残す、個人名はマスク）
-    # 〇〇年〇月〇日パターン
-    text = re.sub(r'[〇○]+年[〇○]+月[〇○]+日', 'RDATE', text)
-
+    # S22: OCRアーティファクト「位置年」→「NUM年」
+    text = text.replace('位置年', 'NUM年')
+    # S23: 「前日」→「NUM前」
+    text = text.replace('前日', 'NUM前')
+    # S24: 時刻範囲統一
+    text = re.sub(r'(NUM時(?:NUM分)?)から(NUM時)', r'\1〜\2', text)
+    # S26: 列ヘッダーの括弧除去
+    text = re.sub(r'（満(NUM|\d+)歳以上の者）', r'満\1歳以上の者', text)
+    # S27: 「従事する労働者数」→「労働者数」
+    text = text.replace('従事する労働者数', '労働者数')
+    # S32: 署名欄日付の正規化
+    text = re.sub(r'令和NUM年月日', '令和年月日', text)
+    text = re.sub(r'令和年月日', 'RDATE', text)
+    # S28: 署名欄ラベル統一
+    text = re.sub(r'(?:氏名|署名)', 'SIGN', text)
+    # S29: 休日テーブル列ヘッダー統一
+    text = re.sub(r'(?:時間外|休日)労働をさせる必要のある', '労働をさせる必要のある', text)
+    # 会社名マスク（\S{0,25}/{0,20}で過剰マッチを防止 — BUG-013対策）
+    text = re.sub(r'(?:株式会社|有限会社|合同会社|一般社団法人|公益財団法人)\S{0,25}', 'COMPANY', text)
+    text = re.sub(r'\S{0,20}(?:株式会社|有限会社|合同会社)', 'COMPANY', text)
+    # S25: 会社名残滓スペース除去
+    text = re.sub(r'([A-Za-z])\s+社', r'\1社', text)
+    # S30: ドライバーテーブルの乗務区分ラベル除去
+    text = re.sub(r'NUM乗務', '', text)
+    # S33: 特別条項テーブルのヘッダー末尾〜①の間の余分コンテンツを除去
+    text = re.sub(
+        r'(延長することができる時間数及び休日労働の時間数)'
+        r'(?:(?:NUM+(?:年)?)+|延長することができる時間数)*'
+        r'(?=①)',
+        r'\1', text
+    )
+    text = re.sub(
+        r'(満NUM歳以上の者)'
+        r'(?:NUM+(?:年)?)+(?=延長することができる時間数)',
+        r'\1', text
+    )
+    # S35: 条文本文中への有効期間ノイズ挿入を除去
+    text = re.sub(r'([^\s。、])RDATEからNUM年間(?=[^がとはにをも])', r'\1', text)
+    # S36: 句点後のマスクトークン前スペースを除去
+    text = re.sub(r'([。、])\s+(NUM|RDATE|COMPANY|SIGN)(?=[^\d])', r'\1\2', text)
+    # S37: 「NUM第N章」→「第N章」（章番号前の列挙数字除去）
+    text = re.sub(r'NUM(?=第\d+章)', '', text)
     return text
 
 def split_arts_raw(text: str) -> dict:
