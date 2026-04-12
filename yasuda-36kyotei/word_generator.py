@@ -3,6 +3,7 @@
 python-docxで協定書を動的生成する（7様式パターン対応）
 """
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from docx import Document
@@ -64,6 +65,14 @@ def _v(data: Dict[str, Any], key: str, default: str = "") -> str:
         return default
     s = str(val).strip()
     return s if s else default
+
+
+def _safe_filename(name: str) -> str:
+    """ファイル名に使用できない文字（/ \\ : * ? " < > | & % #）をアンダースコアに置換"""
+    name = name.replace(" ", "").replace("　", "")
+    name = re.sub(r'[\\/:*?"<>|&%#]', "_", name)
+    name = name.strip(". ")
+    return name or "不明"
 
 
 def set_cell_text(
@@ -924,38 +933,51 @@ def generate_word(data: Dict[str, Any], output_dir: str = "output") -> str:
 
     Returns:
         生成されたファイルパス
+
+    Raises:
+        ValueError: Word生成またはファイル保存に失敗した場合
     """
-    form_type: str = data.get("様式パターン", "9")
+    # _v() を使い、keyがあってもNoneの場合にデフォルト値を返す
+    form_type: str = _v(data, "様式パターン") or "9"
+    社名_raw: str = _v(data, "事業所名", "不明")
+
     generator = GENERATORS.get(form_type, generate_form_9)
+    if form_type not in GENERATORS:
+        logger.warning("未知の様式パターン '%s' を標準様式(9)で処理します [%s]", form_type, 社名_raw)
     form_name: str = FORM_NAMES.get(form_type, FORM_NAMES["9"])
 
-    doc = Document()
+    try:
+        doc = Document()
 
-    # ページ設定
-    section = doc.sections[0]
-    section.page_width = Mm(PAGE_WIDTH_MM)
-    section.page_height = Mm(PAGE_HEIGHT_MM)
-    section.top_margin = Cm(MARGIN_CM)
-    section.bottom_margin = Cm(MARGIN_CM)
-    section.left_margin = Cm(MARGIN_CM)
-    section.right_margin = Cm(MARGIN_CM)
+        # ページ設定
+        section = doc.sections[0]
+        section.page_width = Mm(PAGE_WIDTH_MM)
+        section.page_height = Mm(PAGE_HEIGHT_MM)
+        section.top_margin = Cm(MARGIN_CM)
+        section.bottom_margin = Cm(MARGIN_CM)
+        section.left_margin = Cm(MARGIN_CM)
+        section.right_margin = Cm(MARGIN_CM)
 
-    # 文書生成
-    logger.info("様式 %s の協定書を生成開始: %s", form_type, data.get("事業所名", "不明"))
-    generator(doc, data)
+        # 文書生成
+        logger.info("様式 %s の協定書を生成開始: %s", form_type, 社名_raw)
+        generator(doc, data)
 
-    # 保存
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
+        # 保存
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
 
-    事業所名: str = data.get("事業所名", "不明")
-    safe_name: str = 事業所名.replace("/", "_").replace("\\", "_").replace(" ", "_")
-    filename: str = f"36協定書_{safe_name}_{form_name}.docx"
-    filepath: Path = output_path / filename
+        # ファイル名の安全化（/ \\ : * ? " < > | & % # をアンダースコアに置換）
+        safe_name: str = _safe_filename(社名_raw)
+        filename: str = f"36協定書_{safe_name}_{form_name}.docx"
+        filepath: Path = output_path / filename
 
-    doc.save(str(filepath))
-    logger.info("生成完了: %s", filepath)
-    return str(filepath)
+        doc.save(str(filepath))
+        logger.info("生成完了: %s", filepath)
+        return str(filepath)
+
+    except Exception as exc:
+        logger.error("Word生成エラー [様式=%s, 事業所=%s]: %s", form_type, 社名_raw, exc, exc_info=True)
+        raise ValueError(f"Word生成に失敗しました（{社名_raw}、様式{form_type}）: {exc}") from exc
 
 
 if __name__ == "__main__":

@@ -556,14 +556,14 @@ class TestGenerateWord:
         filepath = generate_word(data, str(tmp_path))
         assert filepath.endswith(".docx")
 
-    def test_all_5_generators_exist(self):
-        """GENERATORSに全5パターンが登録されている"""
-        expected = {"9", "9_2", "9_3", "9_4", "9_5"}
+    def test_all_7_generators_exist(self):
+        """GENERATORSに全7パターンが登録されている（10/10_2を含む）"""
+        expected = {"9", "9_2", "9_3", "9_4", "9_5", "10", "10_2"}
         assert set(GENERATORS.keys()) == expected
 
-    def test_all_5_form_names_exist(self):
-        """FORM_NAMESに全5パターンが登録されている"""
-        expected = {"9", "9_2", "9_3", "9_4", "9_5"}
+    def test_all_7_form_names_exist(self):
+        """FORM_NAMESに全7パターンが登録されている（10/10_2を含む）"""
+        expected = {"9", "9_2", "9_3", "9_4", "9_5", "10", "10_2"}
         assert set(FORM_NAMES.keys()) == expected
 
     def test_word_content_contains_jigyousho(self, tmp_path):
@@ -584,14 +584,19 @@ class TestGenerateWord:
         full_text = "\n".join(p.text for p in doc.paragraphs)
         assert "検証太郎" in full_text
 
-    def test_form_9_2_contains_tokubetsu_section(self, tmp_path):
-        """様式9_2のWordに「特別条項」セクションが含まれる"""
+    def test_form_9_2_contains_tokubetsu_clause(self, tmp_path):
+        """様式9_2のWordに特別条項の内容（健康確保措置・割増率）が含まれる
+        ※段落形式（第7条）のためヘッダー「特別条項」という文字列ではなく内容で検証"""
         from docx import Document
         data = _base_record(様式パターン="9_2", 特別条項の有無="あり", 特別_理由="テスト理由")
         filepath = generate_word(data, str(tmp_path))
         doc = Document(filepath)
         full_text = "\n".join(p.text for p in doc.paragraphs)
-        assert "特別条項" in full_text
+        # 特別条項の実質内容（健康確保措置と割増率）が含まれること
+        assert "健康確保措置" in full_text
+        assert "割増率" in full_text
+        # 特別条項は第7条として実装されている
+        assert "第８条" in full_text  # 有効期間が第8条であることを確認
 
 
 # ====================================================================
