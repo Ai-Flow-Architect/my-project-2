@@ -647,14 +647,34 @@ def _sign_section_a3(社名: str, 職名: str, 代表者: str, 代表職: str, �
 </div>"""
 
 
-def _chapter2_1nen(r: dict, art_start: int, 起算日: str, 所定時間: str, begin: str, end: str, rest: str) -> str:
-    """第2章（1年変形制）の共通HTML。art_start = 最初の条番号（9 or 10）"""
+def _chapter2_1nen(r: dict, art_start: int, 起算日: str, 所定時間: str, begin: str, end: str, rest: str,
+                   has_taishokikan: bool = False) -> str:
+    """第2章（1年変形制）の共通HTML。
+    art_start = 最初の条番号（様式10=9, 様式10_2=10）
+    has_taishokikan = True  → 第11条「対象期間」を挿入（様式10/D社形式）
+                     False → 対象期間なし（様式10_2/F社形式）
+    """
     n = art_start
     漢数字 = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九",
-              "一〇", "一一", "一二", "一三", "一四", "一五", "一六", "一七", "一八"]
+              "一〇", "一一", "一二", "一三", "一四", "一五", "一六", "一七", "一八", "一九"]
 
     def art(no: int) -> str:
-        return f"第{漢数字[no]}条" if no <= 18 else f"第{no}条"
+        return f"第{漢数字[no]}条" if no <= 19 else f"第{no}条"
+
+    # 対象期間条文がある場合は条番号をずらす
+    off = 1 if has_taishokikan else 0
+
+    taishokikan_html = f"""
+<div class="article">
+<p><strong>{art(n+2)}</strong>　本協定の対象期間は、{起算日}から１年間とする。</p>
+</div>
+""" if has_taishokikan else ""
+
+    # 休日条文：D社形式は「第(n+3+off)条の期間における初日を起算日とする」参照を含む
+    if has_taishokikan:
+        kyujitsu_text = f"前条の期間における休日は、{art(n+4+off)}の期間における初日を起算日とする１週に１日は確保するものとし、別添の年間カレンダーのとおりとする。尚、特定期間はないものとする。"
+    else:
+        kyujitsu_text = "前条の期間における休日は、１週に１回の日曜日の休日を確保するものとし、別添の年間カレンダーのとおりとする。尚、特定期間はないものとする。"
 
     return f"""
 <p class="chapter">第2章 1年変形制について</p>
@@ -680,29 +700,29 @@ def _chapter2_1nen(r: dict, art_start: int, 起算日: str, 所定時間: str, b
 <p>　２．　パートタイマー、アルバイト及び臨時の従業員</p>
 <p>　３．　嘱託雇用者で特に定めた者</p>
 </div>
-
+{taishokikan_html}
 <div class="article">
-<p><strong>{art(n+2)}</strong>　前条の期間における休日は、１週に１回の日曜日の休日を確保するものとし、別添の年間カレンダーのとおりとする。尚、特定期間はないものとする。</p>
+<p><strong>{art(n+2+off)}</strong>　{kyujitsu_text}</p>
 </div>
 
 <div class="article">
-<p><strong>{art(n+3)}</strong>　前条の期間における所定労働日は、前条に定める休日以外の日とする。</p>
+<p><strong>{art(n+3+off)}</strong>　前条の期間における所定労働日は、前条に定める休日以外の日とする。</p>
 </div>
 
 <div class="article">
-<p><strong>{art(n+4)}</strong>　変形対象期間における労働時間は、{所定時間}とする。（休憩時間を除く）</p>
+<p><strong>{art(n+4+off)}</strong>　変形対象期間における労働時間は、{所定時間}とする。（休憩時間を除く）</p>
 </div>
 
 <div class="article">
-<p><strong>{art(n+5)}</strong>　業務上やむを得ない事由があるときは、前条の用件の範囲内で、従業員の代表の同意を得て同一週内において休日を振り替えることができる。</p>
+<p><strong>{art(n+5+off)}</strong>　業務上やむを得ない事由があるときは、前条の用件の範囲内で、従業員の代表の同意を得て同一週内において休日を振り替えることができる。</p>
 </div>
 
 <div class="article">
-<p><strong>{art(n+6)}</strong>　本協定に基づく所定労働時間を超えて労働した場合には、就業規則の規定に基づき時間外手当を支払うものとする。</p>
+<p><strong>{art(n+6+off)}</strong>　本協定に基づく所定労働時間を超えて労働した場合には、就業規則の規定に基づき時間外手当を支払うものとする。</p>
 </div>
 
 <div class="article">
-<p><strong>{art(n+7)}</strong>　本協定の有効期間は、{起算日}から1年間とする。</p>
+<p><strong>{art(n+7+off)}</strong>　本協定の有効期間は、{起算日}から1年間とする。</p>
 </div>"""
 
 
@@ -748,7 +768,8 @@ def _build_html_1nen(r: dict) -> str:
 <p><strong>第８条</strong>　特別条項として{特別理由}に特に対応が必要なときは、労使の協議を経て、１か月{月時間}時間までこれを延長することができる。この場合、延長時間を更に延長する回数と法定労働外時間の合計は、{回数}回及び年間{年時間}時間までとし、かつこれが１ヶ月{limit}時間又は１年間{year_limit}時間を超えた時間外労働に対しての割増率を{割増率}％とする。また、60時間を超える場合の割増率は50％とする。</p>
 </div>"""
 
-    chapter2 = _chapter2_1nen(r, 9, 起算日, 所定時間, begin, end, rest)
+    # 様式10（D社形式）は対象期間条文あり（第9〜17条の9条構成）
+    chapter2 = _chapter2_1nen(r, 9, 起算日, 所定時間, begin, end, rest, has_taishokikan=True)
     sign = _sign_section_a3(社名, 職名, 代表者, 代表職, 代表氏名, 年号年)
 
     return f"""<!DOCTYPE html>
