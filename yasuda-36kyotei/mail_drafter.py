@@ -55,10 +55,10 @@ def save_draft(
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     # PDF添付（MIMEBase application/pdf）
-    part = MIMEBase("application", "pdf")
+    encoded_filename = quote(pdf_filename)
+    part = MIMEBase("application", "pdf", name=pdf_filename)
     part.set_payload(pdf_bytes)
     encoders.encode_base64(part)
-    encoded_filename = quote(pdf_filename)
     part.add_header(
         "Content-Disposition",
         f"attachment; filename*=UTF-8''{encoded_filename}",
