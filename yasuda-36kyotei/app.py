@@ -130,9 +130,8 @@ def check_password() -> bool:
 
 
 # ============================================================
-# Yahoo IMAP設定をSecretsから取得（セッション間でキャッシュ）
+# Yahoo IMAP設定をSecretsから取得
 # ============================================================
-@st.cache_resource
 def get_imap_config() -> dict:
     keys = ["yahoo_user", "yahoo_password", "差出人名", "差出人所属", "差出人電話"]
     config = {}
