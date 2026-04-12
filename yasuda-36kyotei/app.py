@@ -137,10 +137,24 @@ def get_imap_config() -> dict:
     config = {}
     for k in keys:
         try:
-            config[k] = st.secrets[k]
+            val = st.secrets[k]
         except Exception:
-            config[k] = os.environ.get(k.upper(), "")
+            val = None
+        # st.secrets が None を返した場合に備えて環境変数をフォールバックとし、
+        # 最終的に文字列型を保証する（imaplib.login() に None を渡さない）
+        if val is None:
+            val = os.environ.get(k.upper(), "")
+        config[k] = str(val) if val is not None else ""
     return config
+
+
+# ============================================================
+# ファイル名ヘルパー（generate_all_files / save_all_drafts 共通）
+# ============================================================
+def _make_pdf_filename(name: str, form_type: str, idx: int) -> str:
+    """PDF用一意ファイル名を返す。両関数で同じロジックを保証する。"""
+    safe = _safe_filename(name or f"企業{idx}")
+    return f"36協定書_{safe}_{form_type}_{idx}.pdf"
 
 
 # ============================================================
@@ -165,20 +179,27 @@ def generate_all_files(
          zipfile.ZipFile(pdf_zip_buf, "w", zipfile.ZIP_DEFLATED) as pdf_zf:
 
         for i, record in enumerate(records):
-            name = record.get("事業所名", f"企業{i+1}")
-            form_type = record.get("様式パターン", "9")
+            # None値ガード: record.get()がNoneを返す場合にf"企業{i+1}"へフォールバック
+            name = record.get("事業所名") or f"企業{i+1}"
+            form_type = record.get("様式パターン") or "9"
             form_label = FORM_NAMES.get(form_type, form_type)
             error_msg = ""
+            # 一意ファイル名用インデックス（同一社名・同一様式の衝突防止）
+            idx = i + 1
 
             # Word生成
             word_ok = False
             try:
                 out_path = generate_word(record, output_dir=tmpdir)
-                word_filename = Path(out_path).name
-                with open(out_path, "rb") as f:
+                # generate_word が返すパスのステムにインデックスを付与して衝突回避
+                original = Path(out_path)
+                word_filename = f"{original.stem}_{idx}{original.suffix}"
+                new_word_path = original.parent / word_filename
+                original.rename(new_word_path)
+                with open(new_word_path, "rb") as f:
                     word_bytes = f.read()
                 word_file_bytes[word_filename] = word_bytes
-                word_zf.write(out_path, arcname=word_filename)
+                word_zf.write(str(new_word_path), arcname=word_filename)
                 word_ok = True
             except Exception as e:
                 error_msg = f"Word: {e}"
@@ -186,8 +207,7 @@ def generate_all_files(
             # PDF生成
             pdf_ok = False
             try:
-                safe_name = _safe_filename(name)
-                pdf_filename = f"36協定書_{safe_name}_{form_type}.pdf"
+                pdf_filename = _make_pdf_filename(name, form_type, idx)
                 pdf_bytes = generate_pdf(record)
                 pdf_file_bytes[pdf_filename] = pdf_bytes
                 pdf_tmp = Path(tmpdir) / pdf_filename
@@ -230,12 +250,14 @@ def save_all_drafts(
     imap_config: dict,
 ) -> list[dict]:
     results = []
-    for record in records:
-        name = record.get("事業所名", "")
-        email_addr = record.get("メールアドレス", "")
-        form_type = record.get("様式パターン", "9")
-        safe_name = _safe_filename(name)
-        pdf_filename = f"36協定書_{safe_name}_{form_type}.pdf"
+    for i, record in enumerate(records):
+        # None値ガード: record.get()がNoneを返す場合に空文字へフォールバック
+        name = record.get("事業所名") or ""
+        email_addr = record.get("メールアドレス") or ""
+        form_type = record.get("様式パターン") or "9"
+        idx = i + 1
+        # _make_pdf_filename で generate_all_files と完全に同じ命名規則を保証
+        pdf_filename = _make_pdf_filename(name, form_type, idx)
 
         if not email_addr:
             results.append({"事業所名": name, "宛先": "（未設定）", "結果": "⚠️ メールアドレスなし"})
