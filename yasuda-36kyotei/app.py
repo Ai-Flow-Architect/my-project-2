@@ -244,19 +244,31 @@ def generate_all_files(
 # ============================================================
 # Yahoo Mail 下書き一括保存（PDF添付）
 # ============================================================
+WORD_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _find_word_filename(word_file_bytes: dict[str, bytes], name: str, idx: int) -> str | None:
+    """word_file_bytes の中から事業所名+インデックスに一致するキーを返す"""
+    safe = _safe_filename(name or f"企業{idx}")
+    suffix = f"_{idx}.docx"
+    for key in word_file_bytes:
+        if safe in key and key.endswith(suffix):
+            return key
+    return None
+
+
 def save_all_drafts(
     records: list[dict],
     pdf_file_bytes: dict[str, bytes],
+    word_file_bytes: dict[str, bytes],
     imap_config: dict,
 ) -> list[dict]:
     results = []
     for i, record in enumerate(records):
-        # None値ガード: record.get()がNoneを返す場合に空文字へフォールバック
         name = record.get("事業所名") or ""
         email_addr = record.get("メールアドレス") or ""
         form_type = record.get("様式パターン") or "9"
         idx = i + 1
-        # _make_pdf_filename で generate_all_files と完全に同じ命名規則を保証
         pdf_filename = _make_pdf_filename(name, form_type, idx)
 
         if not email_addr:
@@ -268,20 +280,30 @@ def save_all_drafts(
             results.append({"事業所名": name, "宛先": email_addr, "結果": "❌ PDFが見つかりません"})
             continue
 
+        # Word（見本）ファイルを事業所名+インデックスで検索
+        word_filename = _find_word_filename(word_file_bytes, name, idx)
+        word_bytes = word_file_bytes.get(word_filename) if word_filename else None
+
         subject = build_subject(record)
         body = build_email_body(record, imap_config)
+
+        # 添付リスト: PDF必須 + Word（取得できた場合のみ追加）
+        attachments = [(pdf_bytes, pdf_filename, "application/pdf")]
+        if word_bytes and word_filename:
+            attachments.append((word_bytes, word_filename, WORD_MIME))
 
         res = save_draft(
             to_address=email_addr,
             subject=subject,
             body=body,
-            pdf_bytes=pdf_bytes,
-            pdf_filename=pdf_filename,
+            attachments=attachments,
             imap_user=imap_config.get("yahoo_user", ""),
             imap_password=imap_config.get("yahoo_password", ""),
             from_address=imap_config.get("yahoo_user", ""),
+            idx=idx,
         )
-        results.append({"事業所名": name, "宛先": email_addr, "結果": res["status"]})
+        word_note = f"（Word: {word_filename}）" if word_filename else "（Word未取得）"
+        results.append({"事業所名": name, "宛先": email_addr, "結果": f"{res['status']} {word_note}"})
 
     return results
 
@@ -508,6 +530,7 @@ def main() -> None:
                 draft_results = save_all_drafts(
                     st.session_state.records,
                     st.session_state.pdf_file_bytes,
+                    st.session_state.word_file_bytes,
                     imap_config,
                 )
             st.session_state.draft_results = draft_results
