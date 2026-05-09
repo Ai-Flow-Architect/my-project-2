@@ -257,12 +257,35 @@ def _find_word_filename(word_file_bytes: dict[str, bytes], name: str, idx: int) 
     return None
 
 
+def _guess_mime(filename: str) -> str:
+    """ファイル名から MIME タイプを推定する（見本ファイル用）"""
+    ext = Path(filename).suffix.lower()
+    return {
+        ".pdf": "application/pdf",
+        ".docx": WORD_MIME,
+        ".doc": "application/msword",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xls": "application/vnd.ms-excel",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+    }.get(ext, "application/octet-stream")
+
+
 def save_all_drafts(
     records: list[dict],
     pdf_file_bytes: dict[str, bytes],
     word_file_bytes: dict[str, bytes],
     imap_config: dict,
+    sample_files: list[tuple[bytes, str, str]] | None = None,
 ) -> list[dict]:
+    """メール下書きを一括保存する
+
+    Args:
+        sample_files: 全レコード共通で添付する見本ファイル一覧
+            [(file_bytes, filename, mime_type), ...]
+    """
+    sample_files = sample_files or []
     results = []
     for i, record in enumerate(records):
         name = record.get("事業所名") or ""
@@ -280,17 +303,19 @@ def save_all_drafts(
             results.append({"事業所名": name, "宛先": email_addr, "結果": "❌ PDFが見つかりません"})
             continue
 
-        # Word（見本）ファイルを事業所名+インデックスで検索
+        # Word（協定書）ファイルを事業所名+インデックスで検索
         word_filename = _find_word_filename(word_file_bytes, name, idx)
         word_bytes = word_file_bytes.get(word_filename) if word_filename else None
 
         subject = build_subject(record)
         body = build_email_body(record, imap_config)
 
-        # 添付リスト: PDF必須 + Word（取得できた場合のみ追加）
+        # 添付リスト: PDF（協定書）+ Word（協定書）+ 見本ファイル群
         attachments = [(pdf_bytes, pdf_filename, "application/pdf")]
         if word_bytes and word_filename:
             attachments.append((word_bytes, word_filename, WORD_MIME))
+        # 見本ファイルを末尾に追加（全レコード共通）
+        attachments.extend(sample_files)
 
         res = save_draft(
             to_address=email_addr,
@@ -302,8 +327,13 @@ def save_all_drafts(
             from_address=imap_config.get("yahoo_user", ""),
             idx=idx,
         )
-        word_note = f"（Word: {word_filename}）" if word_filename else "（Word未取得）"
-        results.append({"事業所名": name, "宛先": email_addr, "結果": f"{res['status']} {word_note}"})
+        attach_count = len(attachments)
+        sample_note = f"・見本{len(sample_files)}件" if sample_files else ""
+        results.append({
+            "事業所名": name,
+            "宛先": email_addr,
+            "結果": f"{res['status']}（添付{attach_count}件{sample_note}）",
+        })
 
     return results
 
@@ -339,6 +369,9 @@ def main() -> None:
         st.session_state.records = []
     if "draft_results" not in st.session_state:
         st.session_state.draft_results = []
+    if "sample_files" not in st.session_state:
+        # 見本ファイル: list[tuple[bytes, filename, mime_type]]
+        st.session_state.sample_files = []
 
     # --------------------------------------------------------
     # STEP 1: Excel アップロード
@@ -491,11 +524,37 @@ def main() -> None:
     st.markdown("""
     <div class="step-box">
         <div class="step-label">STEP 4</div>
-        <div class="step-title">✉️ 協定書（PDF）をメール下書きに一括保存</div>
+        <div class="step-title">✉️ 協定書（PDF・Word）をメール下書きに一括保存</div>
     </div>
     """, unsafe_allow_html=True)
 
+    # 見本ファイル（全社共通で添付するファイル）アップローダー
+    st.markdown("**📎 見本ファイル（全宛先のメールに共通で添付されます）**")
+    sample_uploads = st.file_uploader(
+        "見本書類（PDF・Word・画像など、複数選択可）",
+        type=["pdf", "docx", "doc", "xlsx", "xls", "png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+        key="sample_uploader",
+        label_visibility="collapsed",
+        help="ここにアップロードしたファイルは、全ての事業所宛てメール下書きに共通で添付されます。",
+    )
+    if sample_uploads:
+        sample_files: list[tuple[bytes, str, str]] = []
+        for up in sample_uploads:
+            data = up.read()
+            sample_files.append((data, up.name, _guess_mime(up.name)))
+        st.session_state.sample_files = sample_files
+        for up, (data, _, _) in zip(sample_uploads, sample_files):
+            st.caption(f"・{up.name}（{len(data)//1024}KB）")
+    else:
+        st.session_state.sample_files = []
+        st.caption("見本を添付しない場合はそのまま次へ進めます。")
+
+    st.markdown("---")
+
     # 送信予定テーブル
+    sample_count = len(st.session_state.sample_files)
+    attach_label = f"PDF＋Word{'＋見本'+str(sample_count)+'件' if sample_count else ''}"
     send_preview = []
     for r in records:
         name = r.get("事業所名", "")
@@ -505,7 +564,7 @@ def main() -> None:
             "事業所名": name,
             "宛先メール": email_addr if email_addr else "⚠️ 未設定",
             "件名": subject,
-            "添付": "PDF",
+            "添付": attach_label,
         })
 
     st.markdown("**下書き保存予定の一覧**")
@@ -532,6 +591,7 @@ def main() -> None:
                     st.session_state.pdf_file_bytes,
                     st.session_state.word_file_bytes,
                     imap_config,
+                    sample_files=st.session_state.sample_files,
                 )
             st.session_state.draft_results = draft_results
 
