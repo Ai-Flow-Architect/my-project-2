@@ -1,0 +1,11 @@
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+output/
+*.log
+*.docx
+*.xlsx
+*.mp3
+*.m4a
+*.wav
+*.webm

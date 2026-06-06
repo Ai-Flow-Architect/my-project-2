@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import os
 
 import streamlit as st
@@ -13,12 +14,27 @@ from audio_recorder_streamlit import audio_recorder
 from transcriber import transcribe
 from summarizer import summarize
 from exporter import to_word, to_excel
+from plan_reader import read_plan
+
+
+# ─── Streamlit Secrets → 環境変数ブリッジ ──────────────────────
+# transcriber/summarizer は os.environ から OPENAI_API_KEY を読むため、
+# Streamlit Cloud の Secrets（st.secrets）を環境変数へ橋渡しする。
+def _bridge_secret(key: str) -> None:
+    try:
+        if key in st.secrets and not os.environ.get(key):
+            os.environ[key] = str(st.secrets[key])
+    except Exception:
+        pass
+
+
+_bridge_secret("OPENAI_API_KEY")
 
 # ─── 定数 ──────────────────────────────────────────────────────
 CLIENT_NAME = "ハイライフ"
 PRIMARY_COLOR = "#4a6cf7"
-MAX_FILE_MB = 25
-SUPPORTED_TYPES = ["mp3", "m4a", "wav", "webm"]
+MAX_FILE_MB = 200
+SUPPORTED_TYPES = ["mp3", "m4a", "wav", "webm", "mp4"]
 
 
 # ─── パスワード認証 ─────────────────────────────────────────────
@@ -94,7 +110,7 @@ st.markdown(
     "<p style='text-align:center;color:#666'>面談音声をアップロードするだけで、モニタリング報告書をWord/Excelで出力します</p>",
     unsafe_allow_html=True,
 )
-st.info("⚠️ **1ファイルの上限は25MB（目安：約30分以内）です。**\n\n1時間の面談は前半・後半に分けて、2回アップロードしてください。", icon=None)
+st.info("📁 **最大2時間（目安200MB）の音声ファイルに対応しています。**\n\n25MBを超える場合は自動的に分割して処理します。mp3 / m4a / wav / webm / mp4 に対応。", icon=None)
 st.divider()
 
 # ─── STEP 1: 音声入力（録音 or アップロード） ────────────────────
@@ -107,9 +123,14 @@ tab_record, tab_upload = st.tabs(["🎤 その場で録音する", "📁 ファ�
 
 audio_bytes: bytes | None = None
 audio_filename = "recording.wav"
+audio_source = ""  # "record" or "upload"
 
 with tab_record:
-    st.markdown("マイクボタンを押して録音を開始 → もう一度押すと停止します")
+    st.markdown("**🎤 マイクボタンを押すだけ。** 録音を停止すると、そのまま報告書を自動で作成します。")
+    auto_mode = st.checkbox(
+        "録音を停止したら自動で報告書を作成する", value=True,
+        help="オフにすると、下の生成ボタンを押したときだけ作成します。",
+    )
     recorded = audio_recorder(
         text="",
         recording_color="#e74c3c",
@@ -122,16 +143,17 @@ with tab_record:
     if recorded:
         audio_bytes = recorded
         audio_filename = "recording.wav"
+        audio_source = "record"
         st.audio(recorded, format="audio/wav")
         size_mb = len(recorded) / (1024 * 1024)
         st.caption(f"録音サイズ: {size_mb:.1f} MB")
         if size_mb > MAX_FILE_MB:
-            st.error(f"録音が{MAX_FILE_MB}MBを超えました。前半・後半に分けてください。")
+            st.error(f"録音が{MAX_FILE_MB}MBを超えました。ファイルを分割してください。")
             audio_bytes = None
 
 with tab_upload:
     uploaded = st.file_uploader(
-        f"対応形式: mp3 / m4a / wav / webm　（上限 {MAX_FILE_MB}MB）",
+        f"対応形式: mp3 / m4a / wav / webm / mp4　（上限 {MAX_FILE_MB}MB・最大2時間）",
         type=SUPPORTED_TYPES,
         label_visibility="collapsed",
     )
@@ -139,14 +161,39 @@ with tab_upload:
         file_mb = len(uploaded.getvalue()) / (1024 * 1024)
         st.caption(f"ファイル名: {uploaded.name}　｜　サイズ: {file_mb:.1f} MB")
         if file_mb > MAX_FILE_MB:
-            st.error(f"ファイルサイズが上限({MAX_FILE_MB}MB)を超えています。")
+            st.error(f"ファイルサイズが上限({MAX_FILE_MB}MB)を超えています。2時間以内の音声に分割してください。")
         else:
             audio_bytes = uploaded.getvalue()
             audio_filename = uploaded.name
+            audio_source = "upload"
 
-# ─── STEP 2: 既存ファイルへの追記（任意） ─────────────────────
+# ─── STEP 2: 個別支援計画書（任意） ──────────────────────────
 st.markdown(
-    "<div class='step-box'><b>STEP 2</b>　既存ファイルに追記する場合はアップロード（任意）</div>",
+    "<div class='step-box'><b>STEP 2</b>　個別支援計画書をアップロード（任意・推奨）</div>",
+    unsafe_allow_html=True,
+)
+st.caption("アップロードすると、計画書の目標・課題をもとに報告書の精度が上がります。")
+
+plan_file = st.file_uploader(
+    "個別支援計画書（Excel）",
+    type=["xlsx", "xls"],
+    key="plan_file",
+)
+
+plan_text = ""
+if plan_file:
+    try:
+        plan_text = read_plan(plan_file.getvalue())
+        st.success(f"✅ 個別支援計画書を読み込みました（{len(plan_text)}文字）")
+        with st.expander("読み込み内容を確認する", expanded=False):
+            st.text_area("内容", plan_text, height=150, label_visibility="collapsed")
+    except Exception as e:
+        st.error(f"個別支援計画書の読み込みに失敗しました: {e}")
+        plan_text = ""
+
+# ─── STEP 3: 既存ファイルへの追記（任意） ─────────────────────
+st.markdown(
+    "<div class='step-box'><b>STEP 3</b>　既存ファイルに追記する場合はアップロード（任意）</div>",
     unsafe_allow_html=True,
 )
 
@@ -167,23 +214,50 @@ with col_e:
 if existing_word or existing_excel:
     st.success("✅ 既存ファイルを受け取りました。生成後に末尾へ追記します。")
 
-# ─── STEP 3: 実行ボタン ────────────────────────────────────────
+# ─── STEP 4: 実行ボタン ────────────────────────────────────────
 st.markdown(
-    "<div class='step-box'><b>STEP 3</b>　報告書を生成</div>",
+    "<div class='step-box'><b>STEP 4</b>　報告書を生成</div>",
     unsafe_allow_html=True,
 )
 
 run_btn = st.button("🚀 モニタリング報告書を生成する", use_container_width=True, disabled=audio_bytes is None)
 
-if run_btn and audio_bytes:
-    # 文字起こし
-    with st.spinner("音声を文字起こし中... (1〜2分かかります)"):
-        try:
-            transcript = transcribe(audio_bytes, audio_filename)
-        except Exception as e:
-            st.error(f"文字起こしに失敗しました: {e}")
-            st.stop()
+# ボタン1つで完結：録音停止後、同じ音声に対して一度だけ自動生成する
+audio_hash = hashlib.md5(audio_bytes).hexdigest() if audio_bytes else ""
+auto_run = bool(
+    audio_bytes
+    and audio_source == "record"
+    and locals().get("auto_mode", False)
+    and audio_hash != st.session_state.get("last_done_hash")
+)
+if auto_run:
+    st.info("🎤 録音を検出しました。自動で報告書を作成しています…")
 
+if (run_btn or auto_run) and audio_bytes:
+    st.session_state["last_done_hash"] = audio_hash
+    # 文字起こし（長尺は自動分割）
+    is_large = len(audio_bytes) > 24 * 1024 * 1024
+    spinner_msg = "音声を分割して文字起こし中... (長尺音声は数分かかります)" if is_large else "音声を文字起こし中... (1〜2分かかります)"
+
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+
+    def on_progress(current: int, total: int) -> None:
+        progress_bar.progress(current / total)
+        if total > 1:
+            status_text.text(f"チャンク {current} / {total} を処理中...")
+
+    status_text.text(spinner_msg)
+    try:
+        transcript = transcribe(audio_bytes, audio_filename, progress_callback=on_progress)
+    except Exception as e:
+        progress_bar.empty()
+        status_text.empty()
+        st.error(f"文字起こしに失敗しました: {e}")
+        st.stop()
+
+    progress_bar.empty()
+    status_text.empty()
     st.success("✅ 文字起こし完了")
 
     with st.expander("文字起こし全文を確認する", expanded=False):
@@ -192,7 +266,7 @@ if run_btn and audio_bytes:
     # 報告書整形
     with st.spinner("モニタリング報告書を整形中..."):
         try:
-            minutes = summarize(transcript)
+            minutes = summarize(transcript, plan_text=plan_text)
         except Exception as e:
             st.error(f"報告書整形に失敗しました: {e}")
             st.stop()

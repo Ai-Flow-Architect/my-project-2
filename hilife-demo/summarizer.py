@@ -10,6 +10,11 @@ import os
 
 from openai import OpenAI
 
+# GPTに渡すテキストの上限（トークン超過防止）
+MAX_PLAN_CHARS = 8_000
+MAX_TRANSCRIPT_CHARS = 24_000
+GPT_TIMEOUT = 120  # 秒
+
 SYSTEM_PROMPT = """あなたは障害福祉施設（グループホーム・就労継続支援B型）のサービス管理責任者を補佐するアシスタントです。
 与えられた面談の文字起こしテキストを、モニタリング報告書として以下のJSON形式に整形してください。
 
@@ -52,22 +57,46 @@ SYSTEM_PROMPT = """あなたは障害福祉施設（グループホーム・就�
 - 日本語で出力してください"""
 
 
-def summarize(transcript: str) -> dict:
+def summarize(transcript: str, plan_text: str = "") -> dict:
     """
     文字起こしテキストを受け取り、モニタリング報告書 dict を返す。
+    plan_text が渡された場合は個別支援計画書の内容も参照して生成する。
     """
     api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        raise EnvironmentError("OPENAI_API_KEY が設定されていません。環境変数を確認してください。")
     client = OpenAI(api_key=api_key)
+
+    # トークン超過防止: 長すぎる場合はトランケート
+    if len(plan_text) > MAX_PLAN_CHARS:
+        plan_text = plan_text[:MAX_PLAN_CHARS] + "\n…（計画書が長いため省略しました）"
+    if len(transcript) > MAX_TRANSCRIPT_CHARS:
+        transcript = transcript[:MAX_TRANSCRIPT_CHARS] + "\n…（文字起こしが長いため省略しました）"
+
+    if plan_text:
+        user_content = (
+            f"【個別支援計画書（参考情報）】\n{plan_text}\n\n"
+            f"【面談の文字起こし】\n{transcript}"
+        )
+    else:
+        user_content = transcript
 
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": transcript},
+            {"role": "user", "content": user_content},
         ],
         temperature=0.2,
         response_format={"type": "json_object"},
+        timeout=GPT_TIMEOUT,
     )
 
     raw = response.choices[0].message.content or "{}"
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"GPTのレスポンスをJSONとして解析できませんでした。\n"
+            f"原文（先頭200字）: {raw[:200]}\nエラー: {e}"
+        ) from e
