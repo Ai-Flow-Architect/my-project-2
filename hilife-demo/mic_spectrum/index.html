@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<style>
+  :root { --primary: #4a6cf7; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Helvetica Neue", Arial, "Hiragino Sans", "Meiryo", sans-serif; }
+  #wrap { padding: 4px 2px; }
+  #recBtn {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--primary); color: #fff; border: none; border-radius: 10px;
+    padding: 10px 20px; font-size: 15px; font-weight: 700; cursor: pointer;
+  }
+  #recBtn.recording { background: #e74c3c; }
+  #recBtn:disabled { background: #cccccc; cursor: default; }
+  #viz { width: 100%; height: 140px; background: #f8f9ff; border-radius: 8px;
+         border: 1px solid #e6e9ff; margin-top: 10px; display: block; }
+  #status { margin-top: 8px; font-size: 13px; color: #555; min-height: 18px; }
+  .ok { color: #1e7e34; font-weight: 600; }
+  .warn { color: #b25e00; font-weight: 600; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #fff; display: inline-block; }
+  .recording .dot { animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: 0.25; } }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <button id="recBtn"><span class="dot"></span><span id="btnLabel">🎤 録音を開始</span></button>
+  <canvas id="viz" width="600" height="140"></canvas>
+  <div id="status">マイクボタンを押すと、録音しながら周波数スペクトルがリアルタイムで表示されます。</div>
+</div>
+
+<script>
+// ─── Streamlit コンポーネント プロトコル（ビルド不要・raw postMessage） ───
+const Streamlit = {
+  setComponentReady() {
+    window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
+  },
+  setFrameHeight(h) {
+    window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: h }, "*");
+  },
+  setComponentValue(v) {
+    window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setComponentValue", value: v, dataType: "json" }, "*");
+  },
+};
+
+const btn = document.getElementById("recBtn");
+const btnLabel = document.getElementById("btnLabel");
+const statusEl = document.getElementById("status");
+const canvas = document.getElementById("viz");
+const ctx = canvas.getContext("2d");
+
+let audioCtx, analyser, source, stream, mediaRecorder, rafId;
+let chunks = [];
+let recording = false;
+let recCounter = 0;
+
+function resizeCanvas() {
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * ratio;
+  canvas.height = 140 * ratio;
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+}
+
+function draw() {
+  rafId = requestAnimationFrame(draw);
+  const bins = analyser.frequencyBinCount;          // = fftSize/2
+  const data = new Uint8Array(bins);
+  analyser.getByteFrequencyData(data);              // 0..255 リニア振幅
+
+  const W = canvas.clientWidth;
+  const H = 140;
+  ctx.clearRect(0, 0, W, H);
+
+  const barW = W / bins;
+  let sum = 0;
+  for (let i = 0; i < bins; i++) {
+    const v = data[i] / 255;                        // 0..1（リニア周波数スペクトル）
+    sum += v;
+    const barH = v * (H - 6);
+    ctx.fillStyle = "rgba(74,108,247," + (0.35 + 0.65 * v) + ")";
+    ctx.fillRect(i * barW, H - barH, Math.max(barW * 0.85, 1), barH);
+  }
+  const level = sum / bins;
+  if (recording) {
+    statusEl.innerHTML = level > 0.02
+      ? '<span class="ok">● 録音中 — 音声を受信しています（レベル ' + level.toFixed(2) + '）</span>'
+      : '<span class="warn">● 録音中 — 音量がほぼありません。マイクをご確認ください</span>';
+  }
+}
+
+async function startRecording() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    statusEl.innerHTML = '<span class="warn">マイクの使用が許可されませんでした（' + e.name + '）。ブラウザのマイク許可をご確認ください。</span>';
+    return;
+  }
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  source = audioCtx.createMediaStreamSource(stream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 1024;                            // → 512本のリニアスペクトル
+  analyser.smoothingTimeConstant = 0.75;
+  source.connect(analyser);
+
+  chunks = [];
+  const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+  mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+  mediaRecorder.ondataavailable = (ev) => { if (ev.data && ev.data.size > 0) chunks.push(ev.data); };
+  mediaRecorder.onstop = onStopped;
+  mediaRecorder.start();
+
+  recording = true;
+  btn.classList.add("recording");
+  btnLabel.textContent = "■ 録音を停止";
+  resizeCanvas();
+  draw();
+}
+
+function stopRecording() {
+  recording = false;
+  btn.classList.add("recording");          // keep red until processed
+  btnLabel.textContent = "処理中…";
+  btn.disabled = true;
+  if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+  if (rafId) cancelAnimationFrame(rafId);
+}
+
+function onStopped() {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  if (audioCtx) audioCtx.close();
+  const blob = new Blob(chunks, { type: (mediaRecorder.mimeType || "audio/webm") });
+  const reader = new FileReader();
+  reader.onloadend = () => {
+    const b64 = String(reader.result).split(",")[1] || "";
+    recCounter += 1;
+    Streamlit.setComponentValue({ audio_b64: b64, mime: blob.type || "audio/webm", id: recCounter });
+    statusEl.innerHTML = '<span class="ok">✅ 録音を受信しました（' + (blob.size / 1024 / 1024).toFixed(2) + ' MB）。下で報告書を生成します。</span>';
+    btn.classList.remove("recording");
+    btn.disabled = false;
+    btnLabel.textContent = "🎤 もう一度 録音する";
+  };
+  reader.readAsDataURL(blob);
+}
+
+btn.addEventListener("click", () => { recording ? stopRecording() : startRecording(); });
+window.addEventListener("resize", resizeCanvas);
+window.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "streamlit:render") { resizeCanvas(); }
+});
+
+Streamlit.setComponentReady();
+Streamlit.setFrameHeight(240);
+resizeCanvas();
+</script>
+</body>
+</html>

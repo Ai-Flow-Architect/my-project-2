@@ -5,13 +5,14 @@
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import os
 
 import numpy as np
 import streamlit as st
-from audio_recorder_streamlit import audio_recorder
+import streamlit.components.v1 as components
 
 from transcriber import transcribe
 from summarizer import summarize
@@ -38,6 +39,16 @@ CLIENT_NAME = "ハイライフ"
 PRIMARY_COLOR = "#4a6cf7"
 MAX_FILE_MB = 200
 SUPPORTED_TYPES = ["mp3", "m4a", "wav", "webm", "mp4"]
+
+# ─── ライブ周波数スペクトル録音コンポーネント（録音中リアルタイム表示） ──
+_MIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mic_spectrum")
+_mic_component = components.declare_component("mic_spectrum", path=_MIC_DIR)
+
+
+def mic_spectrum_recorder(key: str = "mic_spectrum"):
+    """録音中にリニア周波数スペクトルをリアルタイム描画し、停止時に録音音声を返す。
+    返り値: None または {"audio_b64": str, "mime": str, "id": int}"""
+    return _mic_component(key=key, default=None)
 
 
 # ─── 波形（音声受信の目視確認） ─────────────────────────────────
@@ -165,31 +176,30 @@ audio_filename = "recording.wav"
 audio_source = ""  # "record" or "upload"
 
 with tab_record:
-    st.markdown("**🎤 マイクボタンを押すだけ。** 録音を停止すると、そのまま報告書を自動で作成します。")
+    st.markdown("**🎤 マイクボタンを押すだけ。** 録音中はリニア周波数スペクトルがリアルタイムで動き、停止すると報告書を自動で作成します。")
     auto_mode = st.checkbox(
         "録音を停止したら自動で報告書を作成する", value=True,
         help="オフにすると、下の生成ボタンを押したときだけ作成します。",
     )
-    recorded = audio_recorder(
-        text="",
-        recording_color="#e74c3c",
-        neutral_color=PRIMARY_COLOR,
-        icon_name="microphone",
-        icon_size="3x",
-        pause_threshold=120.0,
-        sample_rate=16000,
-    )
-    if recorded:
-        audio_bytes = recorded
-        audio_filename = "recording.wav"
-        audio_source = "record"
-        st.audio(recorded, format="audio/wav")
-        render_waveform(recorded, fmt="wav")
-        size_mb = len(recorded) / (1024 * 1024)
-        st.caption(f"録音サイズ: {size_mb:.1f} MB")
-        if size_mb > MAX_FILE_MB:
-            st.error(f"録音が{MAX_FILE_MB}MBを超えました。ファイルを分割してください。")
-            audio_bytes = None
+
+    mic_value = mic_spectrum_recorder(key="mic_spectrum")
+    if mic_value and isinstance(mic_value, dict) and mic_value.get("audio_b64"):
+        try:
+            recorded = base64.b64decode(mic_value["audio_b64"])
+        except Exception:
+            recorded = b""
+        if recorded:
+            audio_bytes = recorded
+            mime = mic_value.get("mime", "audio/webm")
+            audio_filename = "recording.webm" if "webm" in mime else "recording.wav"
+            audio_source = "record"
+            st.audio(recorded, format=mime)
+            render_waveform(recorded, fmt="webm" if "webm" in mime else "wav")
+            size_mb = len(recorded) / (1024 * 1024)
+            st.caption(f"録音サイズ: {size_mb:.1f} MB")
+            if size_mb > MAX_FILE_MB:
+                st.error(f"録音が{MAX_FILE_MB}MBを超えました。ファイルを分割してください。")
+                audio_bytes = None
 
 with tab_upload:
     uploaded = st.file_uploader(
