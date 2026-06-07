@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 
+import numpy as np
 import streamlit as st
 from audio_recorder_streamlit import audio_recorder
 
@@ -15,6 +17,7 @@ from transcriber import transcribe
 from summarizer import summarize
 from exporter import to_word, to_excel
 from plan_reader import read_plan
+from diarizer import diarize, to_text
 
 
 # ─── Streamlit Secrets → 環境変数ブリッジ ──────────────────────
@@ -35,6 +38,42 @@ CLIENT_NAME = "ハイライフ"
 PRIMARY_COLOR = "#4a6cf7"
 MAX_FILE_MB = 200
 SUPPORTED_TYPES = ["mp3", "m4a", "wav", "webm", "mp4"]
+
+
+# ─── 波形（音声受信の目視確認） ─────────────────────────────────
+def render_waveform(audio_bytes: bytes, fmt: str = "wav") -> None:
+    """音声の振幅エンベロープを波形で表示し、音が届いているかを目で確認できるようにする。
+    平らな線＝無音（マイク不達）、波打つ＝音声受信あり。"""
+    try:
+        from pydub import AudioSegment
+
+        seg = AudioSegment.from_file(io.BytesIO(audio_bytes), format=fmt)
+        samples = np.array(seg.get_array_of_samples()).astype(np.float32)
+        if seg.channels == 2 and samples.size:
+            samples = samples.reshape((-1, 2)).mean(axis=1)
+        if samples.size == 0:
+            st.warning("⚠️ 音声データが空です。マイク入力をご確認ください。")
+            return
+        peak = float(np.max(np.abs(samples))) or 1.0
+        norm = samples / peak
+        rms = float(np.sqrt(np.mean(norm ** 2)))  # 0〜1 の音量レベル
+
+        # 約800点のピークエンベロープにダウンサンプルして波形描画
+        n_buckets = 800
+        if norm.size > n_buckets:
+            step = norm.size // n_buckets
+            env = np.abs(norm[: step * n_buckets]).reshape(n_buckets, step).max(axis=1)
+        else:
+            env = np.abs(norm)
+
+        st.caption("🔊 音声の波形（マイク受信の確認）")
+        st.area_chart(env, height=120)
+        if rms < 0.01:
+            st.warning(f"⚠️ 音量がほぼ検出されません（レベル {rms:.3f}）。マイクの位置・入力をご確認ください。")
+        else:
+            st.success(f"✅ 音声を受信しています（音量レベル {rms:.2f}）。")
+    except Exception as e:
+        st.caption(f"（波形の表示はスキップしました: {e}）")
 
 
 # ─── パスワード認証 ─────────────────────────────────────────────
@@ -145,6 +184,7 @@ with tab_record:
         audio_filename = "recording.wav"
         audio_source = "record"
         st.audio(recorded, format="audio/wav")
+        render_waveform(recorded, fmt="wav")
         size_mb = len(recorded) / (1024 * 1024)
         st.caption(f"録音サイズ: {size_mb:.1f} MB")
         if size_mb > MAX_FILE_MB:
@@ -166,61 +206,59 @@ with tab_upload:
             audio_bytes = uploaded.getvalue()
             audio_filename = uploaded.name
             audio_source = "upload"
+            _ext = uploaded.name.rsplit(".", 1)[-1].lower() if "." in uploaded.name else "mp3"
+            render_waveform(audio_bytes, fmt=_ext)
 
-# ─── STEP 2: 個別支援計画書（任意） ──────────────────────────
-st.markdown(
-    "<div class='step-box'><b>STEP 2</b>　個別支援計画書をアップロード（任意・推奨）</div>",
-    unsafe_allow_html=True,
-)
-st.caption("アップロードすると、計画書の目標・課題をもとに報告書の精度が上がります。")
-
-plan_file = st.file_uploader(
-    "個別支援計画書（Excel）",
-    type=["xlsx", "xls"],
-    key="plan_file",
-)
-
-plan_text = ""
-if plan_file:
-    try:
-        plan_text = read_plan(plan_file.getvalue())
-        st.success(f"✅ 個別支援計画書を読み込みました（{len(plan_text)}文字）")
-        with st.expander("読み込み内容を確認する", expanded=False):
-            st.text_area("内容", plan_text, height=150, label_visibility="collapsed")
-    except Exception as e:
-        st.error(f"個別支援計画書の読み込みに失敗しました: {e}")
-        plan_text = ""
-
-# ─── STEP 3: 既存ファイルへの追記（任意） ─────────────────────
-st.markdown(
-    "<div class='step-box'><b>STEP 3</b>　既存ファイルに追記する場合はアップロード（任意）</div>",
-    unsafe_allow_html=True,
-)
-
-col_w, col_e = st.columns(2)
-with col_w:
-    existing_word = st.file_uploader(
-        "既存の Word ファイル（追記用）",
-        type=["docx"],
-        key="existing_word",
-    )
-with col_e:
-    existing_excel = st.file_uploader(
-        "既存の Excel ファイル（追記用）",
-        type=["xlsx"],
-        key="existing_excel",
+# ─── オプション設定（任意） ───────────────────────────────────
+with st.expander("⚙️ オプション設定（個別支援計画書・既存ファイルへの追記）", expanded=False):
+    st.caption("個別支援計画書をアップロードすると、計画書の目標・課題をもとに報告書の精度が上がります。")
+    plan_file = st.file_uploader(
+        "個別支援計画書（Excel・任意）",
+        type=["xlsx", "xls"],
+        key="plan_file",
     )
 
-if existing_word or existing_excel:
-    st.success("✅ 既存ファイルを受け取りました。生成後に末尾へ追記します。")
+    plan_text = ""
+    if plan_file:
+        try:
+            plan_text = read_plan(plan_file.getvalue())
+            st.success(f"✅ 個別支援計画書を読み込みました（{len(plan_text)}文字）")
+            with st.expander("読み込み内容を確認する", expanded=False):
+                st.text_area("内容", plan_text, height=150, label_visibility="collapsed")
+        except Exception as e:
+            st.error(f"個別支援計画書の読み込みに失敗しました: {e}")
+            plan_text = ""
 
-# ─── STEP 4: 実行ボタン ────────────────────────────────────────
-st.markdown(
-    "<div class='step-box'><b>STEP 4</b>　報告書を生成</div>",
-    unsafe_allow_html=True,
+    st.divider()
+    st.caption("既存のWord/Excelに追記する場合はアップロードしてください（任意）。")
+    col_w, col_e = st.columns(2)
+    with col_w:
+        existing_word = st.file_uploader("既存の Word ファイル（追記用）", type=["docx"], key="existing_word")
+    with col_e:
+        existing_excel = st.file_uploader("既存の Excel ファイル（追記用）", type=["xlsx"], key="existing_excel")
+    if existing_word or existing_excel:
+        st.success("✅ 既存ファイルを受け取りました。生成後に末尾へ追記します。")
+
+# 上記 expander の外でも参照できるよう既定値を確保
+plan_text = locals().get("plan_text", "") or ""
+existing_word = locals().get("existing_word")
+existing_excel = locals().get("existing_excel")
+
+# ─── 要約フォーマット選択 ────────────────────────────────────
+SUMMARY_FORMATS = ["モニタリング報告書"]
+summary_format = st.selectbox(
+    "📑 要約フォーマット",
+    SUMMARY_FORMATS,
+    index=0,
+    help="出力する報告書の様式を選びます。",
 )
 
-run_btn = st.button("🚀 モニタリング報告書を生成する", use_container_width=True, disabled=audio_bytes is None)
+# ─── 生成ボタン ───────────────────────────────────────────────
+run_btn = st.button(
+    f"🚀 {summary_format}を生成する",
+    use_container_width=True,
+    disabled=audio_bytes is None,
+)
 
 # ボタン1つで完結：録音停止後、同じ音声に対して一度だけ自動生成する
 audio_hash = hashlib.md5(audio_bytes).hexdigest() if audio_bytes else ""
@@ -235,7 +273,12 @@ if auto_run:
 
 if (run_btn or auto_run) and audio_bytes:
     st.session_state["last_done_hash"] = audio_hash
-    # 文字起こし（長尺は自動分割）
+
+    # ── STEP 2: 全文洗い出し（文字起こし・長尺は自動分割） ──────
+    st.markdown(
+        "<div class='step-box'><b>STEP 2</b>　全文洗い出し（文字起こし）</div>",
+        unsafe_allow_html=True,
+    )
     is_large = len(audio_bytes) > 24 * 1024 * 1024
     spinner_msg = "音声を分割して文字起こし中... (長尺音声は数分かかります)" if is_large else "音声を文字起こし中... (1〜2分かかります)"
 
@@ -258,10 +301,30 @@ if (run_btn or auto_run) and audio_bytes:
 
     progress_bar.empty()
     status_text.empty()
-    st.success("✅ 文字起こし完了")
+    st.success(f"✅ 全文洗い出し完了（{len(transcript)}文字）")
+    st.text_area("文字起こし全文", transcript, height=220, label_visibility="collapsed")
 
-    with st.expander("文字起こし全文を確認する", expanded=False):
-        st.text_area("テキスト", transcript, height=200, label_visibility="collapsed")
+    # ── STEP 3: 話者分解（発言者ごとに整理） ──────────────────
+    st.markdown(
+        "<div class='step-box'><b>STEP 3</b>　話者分解（発言者ごとに整理）</div>",
+        unsafe_allow_html=True,
+    )
+    with st.spinner("発言者を推定して話者分解中..."):
+        try:
+            diarized = diarize(transcript)
+        except Exception as e:
+            st.warning(f"話者分解はスキップしました（{e}）。要約は続行します。")
+            diarized = {"話者ラベル": [], "発言": []}
+    speakers = "／".join(diarized.get("話者ラベル", []))
+    st.success(f"✅ 話者分解完了（話者: {speakers or '—'}）")
+    st.caption("※ 音声の声紋ではなく、会話の文脈から発言者を推定しています。")
+    st.text_area("話者分解", to_text(diarized), height=240, label_visibility="collapsed")
+
+    # ── STEP 4: 要約フォーマット別（生成） ───────────────────
+    st.markdown(
+        f"<div class='step-box'><b>STEP 4</b>　要約フォーマット別（{summary_format}）</div>",
+        unsafe_allow_html=True,
+    )
 
     # 報告書整形
     with st.spinner("モニタリング報告書を整形中..."):
@@ -324,12 +387,9 @@ if (run_btn or auto_run) and audio_bytes:
             with st.expander(f"▶ {label}", expanded=False):
                 st.write(value)
 
-    # ─── STEP 4: ダウンロード ──────────────────────────────────
+    # ─── ダウンロード ──────────────────────────────────────────
     st.divider()
-    st.markdown(
-        "<div class='step-box'><b>STEP 4</b>　ダウンロード</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("#### 📥 ダウンロード")
 
     name = a.get("利用者氏名", "").replace(" ", "") or "報告書"
     create_date = (a.get("モニタリング実施日") or "").replace("年", "").replace("月", "").replace("日", "")
