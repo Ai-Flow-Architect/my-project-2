@@ -55,6 +55,15 @@ let audioCtx, analyser, source, stream, mediaRecorder, rafId;
 let chunks = [];
 let recording = false;
 let recCounter = 0;
+let startMs = 0;
+let longWarned = false;
+const SOFT_LIMIT_MIN = 90;   // この分数を超えたら長時間警告（メモリ・転送負荷対策）
+
+function fmtDur(ms) {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  return m + "分" + String(s % 60).padStart(2, "0") + "秒";
+}
 
 function resizeCanvas() {
   const ratio = window.devicePixelRatio || 1;
@@ -84,9 +93,14 @@ function draw() {
   }
   const level = sum / bins;
   if (recording) {
-    statusEl.innerHTML = level > 0.02
-      ? '<span class="ok">● 録音中 — 音声を受信しています（レベル ' + level.toFixed(2) + '）</span>'
-      : '<span class="warn">● 録音中 — 音量がほぼありません。マイクをご確認ください</span>';
+    const dur = startMs ? fmtDur(performance.now() - startMs) : "";
+    const base = level > 0.02
+      ? '<span class="ok">● 録音中 ' + dur + ' — 音声を受信しています（レベル ' + level.toFixed(2) + '）</span>'
+      : '<span class="warn">● 録音中 ' + dur + ' — 音量がほぼありません。マイクをご確認ください</span>';
+    const longMsg = longWarned
+      ? '<br><span class="warn">⚠️ 長時間の録音です。長すぎると処理が重くなります。区切って録音するのがおすすめです。</span>'
+      : '';
+    statusEl.innerHTML = base + longMsg;
   }
 }
 
@@ -105,17 +119,32 @@ async function startRecording() {
   source.connect(analyser);
 
   chunks = [];
-  const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+  // ブラウザがサポートする録音形式を優先順に選ぶ（Chrome/Edge=webm, Safari=mp4）
+  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/aac"];
+  let mime = "";
+  for (const c of candidates) {
+    if (typeof MediaRecorder.isTypeSupported === "function" && MediaRecorder.isTypeSupported(c)) { mime = c; break; }
+  }
   mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
   mediaRecorder.ondataavailable = (ev) => { if (ev.data && ev.data.size > 0) chunks.push(ev.data); };
   mediaRecorder.onstop = onStopped;
   mediaRecorder.start();
 
   recording = true;
+  startMs = performance.now();
+  longWarned = false;
   btn.classList.add("recording");
   btnLabel.textContent = "■ 録音を停止";
   resizeCanvas();
   draw();
+
+  // 長時間録音の監視（メモリ・転送負荷の保護）
+  if (window._longTimer) clearInterval(window._longTimer);
+  window._longTimer = setInterval(() => {
+    if (recording && performance.now() - startMs > SOFT_LIMIT_MIN * 60 * 1000) {
+      longWarned = true;
+    }
+  }, 10000);
 }
 
 function stopRecording() {
@@ -130,7 +159,16 @@ function stopRecording() {
 function onStopped() {
   if (stream) stream.getTracks().forEach((t) => t.stop());
   if (audioCtx) audioCtx.close();
+  if (window._longTimer) { clearInterval(window._longTimer); window._longTimer = null; }
   const blob = new Blob(chunks, { type: (mediaRecorder.mimeType || "audio/webm") });
+  // 空録音・極端に短い録音のガード（無言で次へ進めない）
+  if (!blob || blob.size < 1024) {
+    statusEl.innerHTML = '<span class="warn">⚠️ 録音が短すぎる/空のため取り込めませんでした。もう一度録音してください。</span>';
+    btn.classList.remove("recording");
+    btn.disabled = false;
+    btnLabel.textContent = "🎤 録音を開始";
+    return;
+  }
   const reader = new FileReader();
   reader.onloadend = () => {
     const b64 = String(reader.result).split(",")[1] || "";

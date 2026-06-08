@@ -40,6 +40,43 @@ PRIMARY_COLOR = "#4a6cf7"
 MAX_FILE_MB = 200
 SUPPORTED_TYPES = ["mp3", "m4a", "wav", "webm", "mp4"]
 
+
+def humanize_error(e: Exception) -> str:
+    """API/処理の例外を、非エンジニアの支援員にも分かる日本語の対処メッセージに翻訳する。"""
+    name = type(e).__name__
+    msg = str(e)
+    low = (name + " " + msg).lower()
+    if "rate" in low and "limit" in low:
+        return "AIの利用が一時的に混み合っています。1〜2分おいて、もう一度お試しください。"
+    if "authentication" in low or "api key" in low or "401" in low or "invalid_api_key" in low:
+        return "AIキーの設定に問題があります（管理者にご連絡ください）。アプリ管理画面のSecretsをご確認ください。"
+    if "timeout" in low or "timed out" in low:
+        return "処理に時間がかかり時間切れになりました。音声を短く分割するか、しばらくしてから再度お試しください。"
+    if "ffmpeg" in low:
+        return "音声変換ツール(ffmpeg)が見つかりません（管理者にご連絡ください）。"
+    if "connection" in low or "network" in low or "getaddrinfo" in low:
+        return "ネットワークに接続できませんでした。通信環境をご確認のうえ、もう一度お試しください。"
+    if "insufficient_quota" in low or "quota" in low or "billing" in low:
+        return "AI利用枠の上限に達した可能性があります（管理者にご連絡ください）。"
+    # 想定外はそのまま（ただし支援員向けに前置き）
+    return f"処理中にエラーが発生しました。もう一度お試しください。（詳細: {name}: {msg[:120]}）"
+
+
+def ext_from_mime(mime: str) -> str:
+    """ブラウザ録音の MIME から拡張子を判定する。
+    Chrome/Edge=audio/webm、Safari=audio/mp4 など、ブラウザで異なるため
+    内容と一致する拡張子を返す（不一致だと文字起こし・波形描画が壊れる）。"""
+    m = (mime or "").lower()
+    if "webm" in m:
+        return "webm"
+    if "ogg" in m:
+        return "ogg"
+    if "mp4" in m or "m4a" in m or "aac" in m or "mpeg" in m:
+        return "mp4"
+    if "wav" in m:
+        return "wav"
+    return "webm"  # 既定（Chrome/Edge 想定）
+
 # ─── ライブ周波数スペクトル録音コンポーネント（録音中リアルタイム表示） ──
 _MIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mic_spectrum")
 _mic_component = components.declare_component("mic_spectrum", path=_MIC_DIR)
@@ -188,13 +225,16 @@ with tab_record:
             recorded = base64.b64decode(mic_value["audio_b64"])
         except Exception:
             recorded = b""
+        if not recorded:
+            st.warning("⚠️ 録音データを受け取れませんでした。もう一度録音するか、「📁 ファイルをアップロード」をご利用ください。")
         if recorded:
             audio_bytes = recorded
             mime = mic_value.get("mime", "audio/webm")
-            audio_filename = "recording.webm" if "webm" in mime else "recording.wav"
+            rec_ext = ext_from_mime(mime)
+            audio_filename = f"recording.{rec_ext}"
             audio_source = "record"
             st.audio(recorded, format=mime)
-            render_waveform(recorded, fmt="webm" if "webm" in mime else "wav")
+            render_waveform(recorded, fmt=rec_ext)
             size_mb = len(recorded) / (1024 * 1024)
             st.caption(f"録音サイズ: {size_mb:.1f} MB")
             if size_mb > MAX_FILE_MB:
@@ -306,7 +346,11 @@ if (run_btn or auto_run) and audio_bytes:
     except Exception as e:
         progress_bar.empty()
         status_text.empty()
-        st.error(f"文字起こしに失敗しました: {e}")
+        st.error(f"⚠️ 文字起こしに失敗しました。{humanize_error(e)}")
+        st.info("💡 「📁 ファイルをアップロード」タブから音声ファイルを選んで再実行することもできます。")
+        st.stop()
+    if not transcript or not transcript.strip():
+        st.error("⚠️ 音声から文字を認識できませんでした。マイクの位置・音量をご確認のうえ、もう一度録音してください。")
         st.stop()
 
     progress_bar.empty()
@@ -341,7 +385,7 @@ if (run_btn or auto_run) and audio_bytes:
         try:
             minutes = summarize(transcript, plan_text=plan_text)
         except Exception as e:
-            st.error(f"報告書整形に失敗しました: {e}")
+            st.error(f"⚠️ 報告書の整形に失敗しました。{humanize_error(e)}")
             st.stop()
 
     st.success("✅ 報告書整形完了")
