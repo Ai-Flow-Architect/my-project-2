@@ -27,3 +27,8 @@ Thumbs.db
 .vscode/settings.json
 # n8n workflow exports (may contain credentials)
 販売/n8n_automations/**/workflow_*.json
+
+# 社内ナレッジ（クライアント実名・絶対パスを含むため公開リポでは追跡しない）
+# 2026-07-26に履歴から除去済み。git add -A で戻さないための恒久ガード。
+KNOWLEDGE.md
+PDF_TRACE_KNOWLEDGE.md
