@@ -8,7 +8,16 @@ __pycache__/
 *.log
 
 # Claude Code の個人設定（Gitに含めない）
-.claude/settings.local.json
+.claude/
+
+# 🔴 このリポは PUBLIC（Streamlit Community Cloud が公開リポ必須のため私有化不可）。
+# 公開してよいのは Streamlit アプリ本体だけ。社内文書・戦略・判断ルールは追跡しない。
+# 実名・WSL2絶対パス・Lark/CloudflareのID類を公開しないための第一防壁（pre-commitは第二層）。
+CLAUDE.md
+docs/
+invoices/
+reports/
+portfolio/
 
 # OS
 .DS_Store
@@ -16,3 +25,5 @@ Thumbs.db
 
 # エディタ
 .vscode/settings.json
+# n8n workflow exports (may contain credentials)
+販売/n8n_automations/**/workflow_*.json
